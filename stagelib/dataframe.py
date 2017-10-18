@@ -8,7 +8,7 @@ from tabulate import tabulate
 
 import generic
 from generic import mergedicts, strip, to_single_space, remove_non_ascii, integer, floating_point
-from timeutil import Date, is_dayfirst
+from timeutils import Date, is_dayfirst
 
 pd.set_option('display.max_colwidth', -1)
 
@@ -59,7 +59,7 @@ def checknumeric(func):
         if self.dtype == 'O':
             raise IsNotNumeric("Values must be converted to a numeric data type (float, int) to ensure accurate comparisons.")
         return func(self, *args, **kwds)
-    return inner 
+    return inner
 
 def series_functions():
     global dtypeobject, quickmapper, checknumeric, IsNotNumeric, _punctuation_or_blank_only
@@ -71,13 +71,13 @@ def series_functions():
     def quickdict(self, arg, *args, **kwds):
         """Create a dictionary containing the result of a function
         or dictionary mapped against the unique values in a series.
-        
+
         If arg is a dictionary/other dict-like container, non matches
         will be left as is to ensure data fidelity.
 
         Parameters:
         ----------
-        
+
         self : SubclassedSeries
         arg : callable or dict to parse series values. (dict, idict, function)
         [kwds] : keyword arguments for arg if arg is a function or callable.
@@ -93,7 +93,7 @@ def series_functions():
         """Check self (astype(str)) for a given pattern.
         Parameters:
         ----------
-        
+
         self : SubclassedSeries.
         pattern : String or compiled regex. (str, _sre.SRE_Pattern)
         [kwds] : Keyword arguments to be passed to self.str.contains.
@@ -107,7 +107,7 @@ def series_functions():
     @checknumeric
     def gtzero(self):
         return self.to_numeric() > 0
-    
+
     @checknumeric
     def ltzero(self):
         return self.to_numeric() < 0
@@ -124,7 +124,7 @@ def series_functions():
         """Strip whitespace and given punctuation from self.
         In addition, attempt to locate values that consist of punctuation
         ONLY and replace with np.nan.
-    
+
         Parameters:
         ----------
         self : pd.Series.
@@ -163,7 +163,7 @@ def series_functions():
             disect = disect,
             *args,
             **mergedicts(kwds, {'dayfirst' : _}))
-    
+
     def disect_date(self, fields = [], **kwds):
         return pd.DataFrame(self.to_datetime(disect = True, **kwds).tolist())
 
@@ -173,7 +173,7 @@ def series_functions():
         Values that meet the condition (mask) will be
         replaced with ifvalue.  All non-matching criteria
         will be replaced with elsevalue.
-        
+
         Parameters
         ----------
         self : pd.Series
@@ -215,7 +215,7 @@ def dataframe_functions():
         duplicates = self.dup_cols()
         if not any(duplicates):
             return self
-    
+
         dmap = {}
         defmap = defaultdict(list)
         for i, f in enumerate(self.columns):
@@ -223,12 +223,12 @@ def dataframe_functions():
                 defmap[f].append(i)
             else:
                 dmap.update({i : f})
-    
+
         for k, v in defmap.items():
             [dmap.update({
                 i2 : "%s.%s.%s" % (k, i1, i2) if i1 > 0 else k
                     }) for i1,i2 in enumerate(v)]
-            
+
         self.columns =  pd.Index([
             str(dmap[i]) for i,c in enumerate(self.columns)
                 ])
@@ -242,7 +242,7 @@ def dataframe_functions():
             series = self[colname]
         except KeyError:
             series = pd.Series(None, index = self.index)
-        
+
         if any(series.isnull()):
             for name in (col for col in self.columns if (colname in str(col) and col != colname)):
                 series = series.combine_first(self[name])
@@ -256,7 +256,7 @@ def dataframe_functions():
 
     def clean_fields(self):
         """Lower case and strip whitespace in column names.
-    
+
         Parameters:
         ----------
         self : pd.DataFrame.
@@ -271,10 +271,10 @@ def dataframe_functions():
             .dropna(how = 'all')
 
     def get_mapper(self, key_field, value_field):
-        
+
         """Create a dictionary with the values from key_field
         as keys / value_field as values.
-        
+
         Parameters:
         -----------
         self : SubclassedDataFrame
@@ -292,11 +292,11 @@ def dataframe_functions():
     def prettify(self, headers = 'keys', **kwds):
         """
         Pretty print tabular data with tabulate.
-        
+
         Parameters:
         ----------
         table : Python data structure; list, dict, pd.DataFrame, etc.
-        
+
         headers : str
         kwds : tabluate keyword args.
         See https://pypi.python.org/pypi/tabulate for details.
@@ -308,7 +308,7 @@ def dataframe_functions():
     def easy_agg(self, fields, flatten = True, sentinel = 'N/A', **kwds):
         """
         self.easy_aggregate('price', {'median_price':'mean'})
-    
+
         Parameters:
         ----------
         self : pd.DataFrame

@@ -6,8 +6,9 @@ from functools import wraps, partial
 import numpy as np
 import pandas as pd
 
-from generic import GenericBase, mergedicts, utcnow, remove_non_ascii, attrlist
-from fileio import Csv, isearch, mkdir, mkpath, writedata
+from generic import GenericBase, mergedicts, remove_non_ascii, attrlist
+from io import Csv, isearch, mkdir, mkpath, writedata
+from timeutils import utcnow
 
 def dbfunc(dbclass):
     def decorator(func):
@@ -112,7 +113,7 @@ class Database(GenericBase):
         return cursor.fetchall()
 
     @connected
-    def affectrows(self, cursor, query, force = False, *args, **kwds): #frame = True, 
+    def affectrows(self, cursor, query, force = False, *args, **kwds): #frame = True,
         if not force:
             assert not a_dangerous_operation(query),\
                 "Cannot perform operation;\n%s'" % query
@@ -134,7 +135,7 @@ class Database(GenericBase):
         if overwrite:
             self.warning("Overwriting table '%s' with contents of '%s'." % (table, path))
             self.affectrows('truncate %s' % table)
-    
+
         self.info("Importing '%s' into '%s'" % (path, table))
         rows_imported = self.affectrows("""
             LOAD DATA LOCAL INFILE "{path}"
@@ -240,14 +241,14 @@ class DatabaseTable(GenericBase):
 
     def __repr__(self):
         return "Table(%s) --> %s: %s" % (self.table, self.id_field, self.id)
-    
+
     @classmethod
     def instance(cls, func):
         def inner(self, *args, **kwds):
             _id = id = kwds.pop('id', None)
             return cls(func(self), id = _id, login = self._login, *args, **kwds)
         return inner
-    
+
     @property
     def records(self):
         return self.select()

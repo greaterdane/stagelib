@@ -4,8 +4,8 @@ import logging
 import pandas as pd
 
 from generic import GenericBase, mergedicts, attrlist
-from fileio import OSPath, File, Folder, datawriter, from_json_if_exists, to_json, mkpath, movepath, mkdir
-from db import Database
+from io import OSPath, File, Folder, chunkwriter, from_json_if_exists, to_json, mkpath, movepath, mkdir
+from sql import Database
 import dataframe
 from learner import learn_fields
 
@@ -56,7 +56,7 @@ class Table(GenericBase):
 
         self.samples = {i : pd.DataFrame(item.pop('sample')) for i,
                             item in enumerate(self.file.items)}
-    
+
     def read(self, data = '', kwds = {}):
         return pd.read_csv(data, **kwds)
 

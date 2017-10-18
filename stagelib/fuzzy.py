@@ -6,7 +6,7 @@ import pandas as pd
 from fuzzywuzzy import fuzz
 
 from stagelib.generic import fuzzyprep, mergedicts
-from stagelib.fileio import df2excel, mkdir, mkpath
+from stagelib.io import df2excel, mkdir, mkpath
 import stagelib.dataframe
 from stagelib.dataframe import quickmapper
 
@@ -36,7 +36,7 @@ def categorize_name(x, N = 3):
     ----------
     x : Item/name to categorize. str
     [n] : The first number of elements to use in categorizing x (2 is default). int
-    
+
     Example:
     --------
     categorize_name("d/b/a Company name") -- > "co"
@@ -92,7 +92,7 @@ def is_a_match(rankings, threshold = 87):
     return (rankings['ratio_total'] >= threshold) & (rankings['ratio_partial'] >= 95)
 
 def is_a_possible_match(rankings, threshold = 70):
-    return (is_a_partial_match(rankings) | 
+    return (is_a_partial_match(rankings) |
         ((rankings['ratio_total'] < threshold) & (rankings['ratio_partial'] >= 80)) |\
         ((rankings['ratio_total'] >= threshold - 20) & (rankings['ratio_partial'] < 97))
             )
@@ -118,7 +118,7 @@ def categorize_matches(rankings):
         'POSSIBLE_MATCH' : is_a_possible_match(rankings),
         'NON_MATCH' : not_a_match(rankings)
             }
-    
+
     for category, mask in __.items():
         logger.info("% results: %s" % (category, len(rankings.loc[mask])))
         rankings.loc[mask, 'match_category'] = category
@@ -174,7 +174,7 @@ def get_rankings(x_df, y_df, match_col, threshold = 88, **kwds):
 def fuzzymatch(x_df, y_df, match_col, outfile_prefix = '', intern_folder = 'check', **kwds):
     match_groups = get_rankings(x_df,
         y_df, match_col, **kwds).groupby('match_category')
-        
+
     results_to_csv("%s_Non-matches.csv" % outfile_prefix,
         match_groups.get_group('NON_MATCH'))
     try:
@@ -228,7 +228,7 @@ def matchsetup(match_col):
     """
     def decorator(func):
         @wraps(func)
-        def inner(x_df, y_df, *args, **kwds):           
+        def inner(x_df, y_df, *args, **kwds):
             return fuzzymatch(x_df, y_df, match_col, **kwds)
         return inner
     return decorator

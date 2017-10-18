@@ -250,7 +250,7 @@ class Csv(TabularFile):
     IMPROPER = r'(.*?"),(?:[",]+)?((?:[\r\n]|$))'
     improper = isearch(IMPROPER)
     non_field = isearch(NON_FIELD)
-    fix = partial(resub(IMPROPER), r'\1\2')
+    fix = partial(re.sub, IMPROPER, r'\1\2')
 
     def __init__(self, path, mode = "U", chunksize = 79650, **kwds):
         super(Csv, self).__init__(path, mode = mode, chunksize = chunksize, **kwds)
@@ -294,16 +294,16 @@ class Csv(TabularFile):
     def rules(self):
         if not hasattr(self, '_header'):
             self._header = self.locate_header(self.testrows)
-            
+
         skprows = self._header[0]
         if self.chunkidx > 0:
             skprows = 0
 
-        return {delimiter = getattr(self, 'delimiter', self.sniff()),
+        return dict(delimiter = getattr(self, 'delimiter', self.sniff()),
                 nrows = getattr(self, 'nrows', None),
                 skiprows = skprows,
-                names = self._header[1]}
-        
+                names = self._header[1])
+
     @filehandler()
     def head(self, n = 50):
         return Csv.fix(''.join(self.readline() for i in xrange(n)))
@@ -402,7 +402,7 @@ class Folder(OSPath):
         for zipname in filter(is_zipfile, cls.listdir(dirname, **kwds)):
             fileunzip(zipname, recursive = recursive_unzip, outdir = extractdir)
         return extractdir
-        
+
     @classmethod
     def table(cls, *args, **kwds):
         return pd.DataFrame([

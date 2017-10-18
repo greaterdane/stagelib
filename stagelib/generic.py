@@ -31,12 +31,12 @@ def configurelogging(logger, ch = None, fh = None, formatter = '', level = loggi
         fh = logging.handlers.RotatingFileHandler(logfile, encoding = 'utf-8')
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(_formatter)
-    
+
     if not ch:
         ch = logging.StreamHandler()
         ch.setLevel(logging.DEBUG)
         ch.setFormatter(_formatter)
-    
+
     logger.setLevel(level)
     logger.addHandler(fh)
     logger.addHandler(ch)
@@ -145,12 +145,12 @@ def fuzzyprep(x):
     Parameters:
     -----------
     x : Item or string to parse. str
-    
+
     """
     x =  remove_non_ascii(x)
     if not isinstance(x, str):
         x = str(x)
-    
+
     return ''.join(re.split(r'\s+', x\
         .translate(None, string.punctuation).lower()))
 
@@ -218,7 +218,7 @@ class EasyInit(object):
         else:
             obj._logger = logger
 
-        removehandlers(obj._logger)           
+        removehandlers(obj._logger)
         configurelogging(obj._logger, extrakeys = extra.keys())
         for level in ['info', 'debug', 'warning', 'error', 'critical']:
             setattr(obj, level, lambda msg, level = level: getattr(obj._logger, level)(msg, extra = extra))
@@ -232,7 +232,7 @@ class EasyInit(object):
             if setuplogging:
                 extra = {k : v for k, v in slf.__dict__.items() if v in args}
                 self.add_logging_methods(slf, extra = extra)
-            __ = merge_dicts(kwds, self.kwds, self._kwds)
+            __ = mergedicts(kwds, self.kwds, self._kwds)
             for k, v in __.items():
                 if '_logging' not in k:
                     setattr(slf, k, v)

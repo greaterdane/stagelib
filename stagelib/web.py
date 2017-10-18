@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from generic import remove_non_ascii
-from fileio import OSPath
+from io import OSPath
 
 USER_AGENT = r"Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36"
 ACCEPT = r"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
@@ -25,9 +25,9 @@ def clean_tag(x):
 def clean_tags(seq):
     return map(clean_tag, seq)
 
-def check_tag(tag, name, attr):
+def check_tag(tag, name, attr_text):
     if tag.name == name:
-        if attrs == tag.attrs :
+        if attr_text in tag.attrs or re.search(attr_text, tag.text, re.I):
             return True
     return False
 
@@ -63,7 +63,7 @@ class HomeBrowser(mechanize.Browser, object):
     @property
     def resp(self):
         return self.response()
-        
+
     @property
     def status_code(self):
         return self.resp.code
@@ -102,3 +102,9 @@ class HomeBrowser(mechanize.Browser, object):
 
     def browse(self, *args, **kwds):
         raise NotImplementedError
+
+    def findtag(self, tagname, findall = False, **kwds):
+        fname = 'find'
+        if findall:
+            fname = 'find_all'
+        return getattr(self.soup, fname)(tagname, **kwds)
