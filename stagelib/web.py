@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from generic import remove_non_ascii
-from io import OSPath
+from fileIO import OSPath
 
 USER_AGENT = r"Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36"
 ACCEPT = r"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"

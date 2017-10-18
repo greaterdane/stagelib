@@ -6,7 +6,7 @@ import pandas as pd
 from fuzzywuzzy import fuzz
 
 from stagelib.generic import fuzzyprep, mergedicts
-from stagelib.io import df2excel, mkdir, mkpath
+from stagelib.fileIO import df2excel, mkdir, mkpath
 import stagelib.dataframe
 from stagelib.dataframe import quickmapper
 

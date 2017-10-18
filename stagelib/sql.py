@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from generic import GenericBase, mergedicts, remove_non_ascii, attrlist
-from io import Csv, isearch, mkdir, mkpath, writedata
+from fileIO import Csv, isearch, mkdir, mkpath, writedata
 from timeutils import utcnow
 
 def dbfunc(dbclass):

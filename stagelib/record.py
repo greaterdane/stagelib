@@ -10,7 +10,7 @@ import usaddress
 from nameparser import HumanName
 
 from generic import strip, to_single_space, remove_non_ascii
-from fileio import OSPath, from_json, mkpath
+from fileIO import OSPath, from_json, mkpath
 import dataframe
 from dataframe import quickmapper
 

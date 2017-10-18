@@ -4,7 +4,7 @@ import logging
 import pandas as pd
 
 from generic import GenericBase, mergedicts, attrlist
-from io import OSPath, File, Folder, chunkwriter, from_json_if_exists, to_json, mkpath, movepath, mkdir
+from fileIO import OSPath, File, Folder, chunkwriter, from_json_if_exists, to_json, mkpath, movepath, mkdir
 from sql import Database
 import dataframe
 from learner import learn_fields

@@ -2,7 +2,7 @@ import re
 from collections import defaultdict
 import textract
 
-from fileio import *
+from fileIO import *
 
 def extract_text(path):
     return textract.process(path)

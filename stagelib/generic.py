@@ -52,6 +52,9 @@ def mergedicts(*dictionaries, **kwds):
 def reversedict(dictionary):
     return {v : k for k, v in dictionary.items()}
 
+def dictupgrade(dictionary, func, *args, **kwds):
+    return {k : func(v, *args, **kwds) for k, v in dictionary.items()}
+
 def chunker(iterable, chunksize = 675000):
     _ = iter(iterable)
     while True:
