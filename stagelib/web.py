@@ -20,7 +20,8 @@ def pause(start = 687, stop = 1387):
         sleep(.01)
 
 def clean_tag(x):
-    return re.sub(r'\s{2,}', ' ', remove_non_ascii(x.text)).strip()
+    return re.sub(r'\s{2,}', ' ',
+        remove_non_ascii(x.text)).strip().replace('&amp;', '&')
 
 def clean_tags(seq):
     return map(clean_tag, seq)
