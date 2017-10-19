@@ -28,7 +28,7 @@ def presence(exists = True):
     def decorator(func):
         @wraps(func)
         def inner(path, *args, **kwds):
-            if os.path.exists() is exists:
+            if OSPath.exists(path) is exists:
                 return func(str(path), *args, **kwds)
         return inner
     return decorator
@@ -182,19 +182,20 @@ class OSPath(GenericBase):
         if not hasattr(self, '_properties'):
             self._properties = {}
             for k, v in self.__dict__.items():
-                if is_key(k):
-                    k = is_key(k).group(1)
+                if self.is_key(k):
+                    k = self.is_key(k).group(1)
                     if isinstance(v, float):
                         v = date.fromtimestamp(v).strftime("%Y-%m-%d %I:%M:%S")
                     elif callable(v):
                         v = v()
-                    self.__p.update({k : v})
+                    self._properties.update({k : v})
         return self._properties
 
 class File(OSPath):
     def __init__(self, path, mode = "rb", chunksize = 5 * (1024*1024), **kwds):
         super(File, self).__init__(path, mode = mode, chunksize = chunksize, **kwds)
         self.kwds = kwds
+        self.chunkidx = 0
 
     def __iter__(self):
         with open(self.path, self.mode) as fh:
@@ -202,7 +203,7 @@ class File(OSPath):
                 self.chunkidx = i; yield data
 
     @staticmethod
-    def guess_type(path, **kwds):
+    def guess(path, **kwds):
         try:
             return Excel(path, **kwds)
         except xlrd.XLRDError:
@@ -246,7 +247,7 @@ class TabularFile(File):
 
 class Csv(TabularFile):
     DELIMITERS = '|,\t;:'
-    NON_FIELD = '(?=^(?:(?:\$)\d+(?:[-\/\.\s,]+|$)|[%s]|[\|,\t]+(?:\s+)?|$)$)' % punctuation
+    NON_FIELD = '^(?:\s+)?(?:(?:\$)?\d+(?:[-\/\.\s,]+|$)|[%s]|[\|,\t]+(?:\s+)?|$)' % punctuation
     IMPROPER = r'(.*?"),(?:[",]+)?((?:[\r\n]|$))'
     improper = isearch(IMPROPER)
     non_field = isearch(NON_FIELD)
@@ -334,9 +335,8 @@ class Csv(TabularFile):
             if self.delimiter == '|':
                 data = re.sub(r'\s+\|\s+', ' - ', data)
 
-            self(data, **mergedicts(kwds, self.rules))
+            self(data, **mergedicts(self.kwds, self.rules))
             gc.collect()
-            yield kwds
 
 class IncompleteExcelFile(Exception):
     def __init__(self):
@@ -382,7 +382,6 @@ class Folder(OSPath):
         self.dist = set()
         self.recursive = recursive
         self.files_only = files_only
-        importpandas()
         super(Folder, self).__init__(path, setuplogging = setuplogging)
 
     def __getitem__(self, n):
@@ -405,6 +404,7 @@ class Folder(OSPath):
 
     @classmethod
     def table(cls, *args, **kwds):
+        importpandas()
         return pd.DataFrame([
             OSPath(path).properties for path in Folder.listdir(*args, **kwds)
                 ])

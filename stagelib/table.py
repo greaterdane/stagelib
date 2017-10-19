@@ -16,7 +16,7 @@ class Table(GenericBase):
     def __init__(self, path, outfile = '', preprocess = True, *args, **kwds):
         self.path = path
         super(Table, self).__init__(path, outfile = outfile)
-        self.file = File.guess_type(path, **kwds)
+        self.file = File.guess(path, **kwds)
 
         if not outfile:
             self.outfile = "%s_output.csv" % (self.file.stem)
@@ -51,7 +51,7 @@ class Table(GenericBase):
         return obj
 
     def preprocess(self):
-        map(None, self.file.preprocess())
+        self.file.preprocess()
         self.properties = self.file.properties
 
         self.samples = {i : pd.DataFrame(item.pop('sample')) for i,
@@ -68,7 +68,7 @@ class Table(GenericBase):
         self.info("data written to '%s'" % self.outfile)
 
 class StageTable(Table):
-    CONFIGDIR = os.path.join(os.path.dirname(__file__), 'config')
+    CONFIGDIR = mkdir(OSPath.dirname(__file__), 'config')
     DEFAULT_FIELDSPATH = mkpath(CONFIGDIR, 'fields_config.json')
 
     def __init__(self, path, fields_path = '', learn = False, table = '', omit = ('\\', '='), **kwds):
@@ -116,6 +116,8 @@ class StageTable(Table):
     def conform(df, table, learn = False, fields_path = '', fields = [], fields_map = {}, **kwds):
         if not fields:
             fields = StageTable.get_table_fields(table, **kwds)
+        elif not table:
+            fields = df.columns
 
         if learn:
             fields_map.update(StageTable.learnfields(df,
@@ -127,7 +129,8 @@ class StageTable(Table):
 
     @property
     def fieldgroups(self):
-        return [i for i in attrlist(self) if isinstance(i[1], list) and i[0].endswith('_fields')]
+        return [i for i in self.__dict__.items() if
+            isinstance(i[1], list) and i[0].endswith('_fields')]
 
     def _conform(self, df, **kwds):
         return self.conform(df, self.table, fields_map = self.fields_map, **kwds)
@@ -164,7 +167,10 @@ class StageTable(Table):
             self.field_mapper()
 
     def getfunc(self, name):
-        return getattr(pd.Series, "to_{}".format(name.split('_')[0]))
+        fname = "to_{}".format(name.split('_')[0])
+        if name == 'text_fields'
+            fname = 'textclean'
+        return getattr(pd.Series, fname)
 
     def normalize(self, df, *args, **kwds):
         df = df.rename(columns = self.fields_map).clean(*self.omit)
@@ -176,4 +182,4 @@ class StageTable(Table):
             if fields:
                 cols = df.filter_fields(items = fieldlist)
                 df[cols] = df[cols].apply(self.getfunc(name))
-        return self.conform(df)
+        return self._conform(df)
