@@ -20,11 +20,11 @@ def pause(start = 687, stop = 1387):
         sleep(.01)
 
 def cleantag(x):
-    return re.sub(r'\s{2,}', ' ',
-        remove_non_ascii(x.text)).strip().replace('&amp;', '&')
+    return str(re.sub(r'\s{2,}', ' ',
+        remove_non_ascii(x.text)).strip().replace('&amp;', '&'))
 
 def cleantags(seq):
-    return map(clean_tag, seq)
+    return map(cleantag, seq)
 
 def check_tag(tag, name, attr_text):
     if tag.name == name:
