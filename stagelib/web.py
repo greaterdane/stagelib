@@ -19,11 +19,11 @@ def pause(start = 687, stop = 1387):
     for i in tqdm(xrange(randint(start, stop)), desc = "Paused"):
         sleep(.01)
 
-def clean_tag(x):
+def cleantag(x):
     return re.sub(r'\s{2,}', ' ',
         remove_non_ascii(x.text)).strip().replace('&amp;', '&')
 
-def clean_tags(seq):
+def cleantags(seq):
     return map(clean_tag, seq)
 
 def check_tag(tag, name, attr_text):
