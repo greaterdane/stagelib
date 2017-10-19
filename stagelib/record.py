@@ -66,7 +66,8 @@ def parse_names(series):
             ], index = series.index).clean()
 
 class USAddr(object):
-    cnfg = from_json(mkpath(*[os.path.dirname(__file__), 'config','addresslabels','address_labels.json']))
+    _labeldir = mkdir(*[os.path.dirname(__file__), 'config','addresslabels')
+    cnfg = from_json(mkpath(_labeldir, 'address_labels.json']))
     labels = {k:([v] if not isinstance(v,list) else v)
               for k,v in cnfg['labels'].items()}
 
