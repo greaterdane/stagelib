@@ -65,7 +65,7 @@ class Table(GenericBase):
         if self.chunkidx > 1:
             kwds.update({'header' : False})
 
-        datawriter(self.outfile, df.to_csv(index = False, **kwds))
+        chunkwriter(self.outfile, df.to_csv(index = False, **kwds))
         self.info("data written to '%s'" % self.outfile)
 
 class StageTable(Table):
