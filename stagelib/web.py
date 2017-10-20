@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from generic import remove_non_ascii
-from fileIO import OSPath
+from fileIO import OSPath, isearch
 
 USER_AGENT = r"Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36"
 ACCEPT = r"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
@@ -26,22 +26,31 @@ def cleantag(x):
 def cleantags(seq):
     return map(cleantag, seq)
 
-def check_tag(tag, name, attr_text):
+def checktag(tag, name, text):
     if tag.name == name:
-        if attr_text in tag.attrs or re.search(attr_text, tag.text, re.I):
+        if text in tag.attrs or isearch(text)(tag.text):
             return True
     return False
 
-def get_soup(x):
+def getsoup(x):
     return BeautifulSoup(x, "lxml")
 
 def read_soup_local(path):
     with open(path) as r:
-        return get_soup(r.read())
+        return getsoup(r.read())
 
 def write_soup_local(soup, output_file):
     with open(output_file, 'w') as w:
         w.write(soup.prettify().encode('utf-8'))
+
+def find_redtext(tag):
+    __ = tag.findAll('span', {'class' : ["PrintHistRed"]})
+    if not __:
+        return tag.findAll('font', {'color' : "#ff0000"})
+    return __
+
+def find_checkedboxes(soup):
+    return soup.find_all('img', {'alt' : re.compile(r'(?<!not )(?:changed|selected|checked)', re.I)})
 
 class HomeBrowser(mechanize.Browser, object):
     def __init__(self, starturl = 'www.google.com'):
@@ -66,7 +75,7 @@ class HomeBrowser(mechanize.Browser, object):
         return self.response()
 
     @property
-    def status_code(self):
+    def statuscode(self):
         return self.resp.code
 
     @property
@@ -75,12 +84,20 @@ class HomeBrowser(mechanize.Browser, object):
 
     @property
     def soup(self):
-        return BeautifulSoup(self.data, "lxml")
+        return getsoup(self.data)
+
+    @property
+    def currenturl(self):
+        return self.geturl()
+
+    @property
+    def throttled(self):
+        return self.statuscode in [503, 403, 401]
 
     def back(self):
         try:
             super(HomeBrowser, self).back()
-            if hasattr(self, 'logger'):
+            if hasattr(self, '_logger'):
                 self.logger.info("Back at '{}'".format(self.geturl()))
         except mechanize.BrowserStateError:
             pass
@@ -92,20 +109,17 @@ class HomeBrowser(mechanize.Browser, object):
         if not OSPath.exists(output_file):
             self.retrieve(url, output_file)[0]
 
-    def check_current_url(self, pattern):
-        return re.search(pattern, self.geturl())
+    def checkurl(self, pattern, url):
+        return isearch(pattern)(url)
 
-    def build_link(self, url):
+    def check_currenturl(self, pattern):
+        return checkurl(pattern, self.currenturl)
+
+    def buildlink(self, url):
         return "%s%s" % (self.starturl, url)
 
-    def filter_links(self, pattern):
+    def filterlinks(self, pattern):
         return (x for x in self.links() if re.search(pattern, x.url))
 
     def browse(self, *args, **kwds):
         raise NotImplementedError
-
-    def findtag(self, tagname, findall = False, **kwds):
-        fname = 'find'
-        if findall:
-            fname = 'find_all'
-        return getattr(self.soup, fname)(tagname, **kwds)
