@@ -1,4 +1,5 @@
 import os, sys, io, re, gc, csv, xlrd, json, zipfile
+import xml.etree.cElementTree as ET
 import shutil, subprocess, hashlib, contextlib
 from subprocess import PIPE
 from datetime import date
@@ -142,9 +143,29 @@ def from_json(fh):
 def from_json_if_exists(fh):
     return from_json(fh)
 
-@filehandler(mode = 'w')
-def to_json(fh, data, mode = 'w'):
+@filehandler(mode = 'wb')
+def to_json(fh, data):
     fh.write(json.dumps(data, sort_keys = True, indent = 4,))
+
+def parsexml(path, tagstart, tagstop):
+    iterxml = ET.iterparse(path)
+    data = []
+    while True:
+        event, elem = iterxml.next()
+        if elem.tag != tagstart:
+            data.append({elem.tag : elem.items()})
+        if elem.tag == tagstop:
+            yield data
+            data = []
+
+def xml2df(path, tagstart, tagstop)
+    rows = []
+    for data in parsexml(path, tagstart, tagstop):
+        row = {}
+        for item in data:
+            row.update(dict(item.values()[0]))
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 def df2excel(output_file, **kwds):
     importpandas()
