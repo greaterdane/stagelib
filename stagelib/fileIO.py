@@ -12,6 +12,7 @@ from timeutils import utcnow
 
 pd = None
 isearch = partial(lambda x: re.compile(x, re.I).search)
+re_NONFIELD = re.compile('^(?:\s+)?(?:(?:\$)?\d+(?:[-\/\.\s,]+|$)|[%s]|[\|,\t]+(?:\s+)?|$)' % punctuation)
 
 def importpandas():
     global pd
@@ -155,6 +156,20 @@ def df2excel(output_file, **kwds):
             encoding = 'utf-8')
     xlwriter.save()
 
+def is_nonfield(x):
+    return re_NONFIELD.search(x)
+
+def locateheader(rows):
+    lens = Csv.rowlengths(rows)
+    ml = max(lens)
+    ix = lens.index(ml)
+    for i, row in enumerate(rows[ix:], ix):
+        if any(is_nonfield(re.sub('\s+', ' ', str(x))) for x in row):
+            continue
+        return i + 1, row
+    else:
+        return ix, Csv.createheader(ml)
+
 class OSPathMeta(type):
     _methods = attrdict(os.path)
     def __getattr__(cls, name):
@@ -219,7 +234,7 @@ class TabularFile(File):
             self.items = []
 
         kwds = mergedicts(kwds, self.kwds, lineterminator = '\n')
-        if 'converters' not in kwds:
+        if 'names' in kwds and 'converters' not in kwds:
             kwds['converters'] = {name : str for name in kwds['names']}
 
         if 'na_values' not in kwds:
@@ -241,21 +256,23 @@ class TabularFile(File):
     @property
     def properties(self):
         __ = super(TabularFile, self).properties
-        if hasattr(self, 'nrows'):
-            __.update({'rows_original' : self.nrows})
+        if hasattr(self, '_nrows'):
+            __.update({'rows_original' : self._nrows})
         return __
+
+    def checkheader(self, rows, kwds):
+        if 'header' not in self.kwds:
+            __ = locateheader(rows)
+            return mergedicts(kwds, skiprows = __[0], names = __[1])
+        return kwds
 
 class Csv(TabularFile):
     DELIMITERS = '|,\t;:'
-    NON_FIELD = '^(?:\s+)?(?:(?:\$)?\d+(?:[-\/\.\s,]+|$)|[%s]|[\|,\t]+(?:\s+)?|$)' % punctuation
-    IMPROPER = r'(.*?"),(?:[",]+)?((?:[\r\n]|$))'
-    improper = isearch(IMPROPER)
-    non_field = isearch(NON_FIELD)
-    fix = partial(re.sub, IMPROPER, r'\1\2')
+    fix = lambda x: x.replace('","\n', '"\n')
 
     def __init__(self, path, mode = "U", chunksize = 79650, **kwds):
         super(Csv, self).__init__(path, mode = mode, chunksize = chunksize, **kwds)
-        self.fixcsv = Csv.improper(self.testraw)
+        self.fixcsv = '","\n' in self.testraw
         self.delimiter = self.sniff()
 
     @staticmethod
@@ -267,21 +284,9 @@ class Csv(TabularFile):
         return map(len, rows)
 
     @staticmethod
-    def create_header(length = 10):
+    def createheader(length = 10):
         return map(lambda x: "field.%s.of.%s" % (x[0], length),
             enumerate(xrange(1, length + 1), 1))
-
-    @staticmethod
-    def locate_header(rows):
-        lens = Csv.rowlengths(rows)
-        ml = max(lens)
-        ix = lens.index(ml)
-        for i, row in enumerate(rows[ix:], ix):
-            if any(Csv.non_field(re.sub('\s+', ' ', str(x))) for x in row):
-                continue
-            return i + 1, row
-        else:
-            return ix, Csv.create_header(ml)
 
     @property
     def testraw(self):
@@ -289,25 +294,23 @@ class Csv(TabularFile):
 
     @property
     def testrows(self):
+        __ = self.testraw
+        if self.fixcsv: __ = self.fix(__)
         return self.reader(self.testraw)
 
     @property
     def rules(self):
-        if not hasattr(self, '_header'):
-            self._header = self.locate_header(self.testrows)
+        kwds = self.checkheader(self.testrows,
+            {'skiprows' : self.kwds.get('skiprows', 0)})
 
-        skprows = self._header[0]
         if self.chunkidx > 0:
-            skprows = 0
+            kwds['skiprows'] = 0
+        return mergedicts(kwds,
+            delimiter = self.delimiter)
 
-        return dict(delimiter = getattr(self, 'delimiter', self.sniff()),
-                nrows = getattr(self, 'nrows', None),
-                skiprows = skprows,
-                names = self._header[1])
-
-    @filehandler()
+    @filehandler(mode = "U")
     def head(self, n = 50):
-        return Csv.fix(''.join(self.readline() for i in xrange(n)))
+        for i in chunker(self, n): return ''.join(i)
 
     def sniff(self):
         counts = filter(lambda x: x[0] in Csv.DELIMITERS,
@@ -315,7 +318,7 @@ class Csv(TabularFile):
 
         for k,v in counts:
             if k in Csv.DELIMITERS:
-                return k
+                return str(k)
         raise csv.Error, "Delimiter undetermined."
 
     def reader(self, data):
@@ -323,18 +326,15 @@ class Csv(TabularFile):
             delimiter = self.delimiter, quoting = 1)]
 
     def preprocess(self):
-        self.nrows = 0
-        self._header = self.locate_header(self.testrows)
-
+        self._nrows = 0
         for i, data in enumerate(self):
-            self.nrows += len(data)
+            self._nrows += len(data)
             data = ''.join(data)
             if self.fixcsv:
-                data = Csv.fix(data)
+                data = self.fix(data)
 
             if self.delimiter == '|':
-                data = re.sub(r'\s+\|\s+', ' - ', data)
-
+                data = data.replace(' | ', ' - ')
             self(data, **mergedicts(self.kwds, self.rules))
             gc.collect()
 
@@ -347,7 +347,7 @@ class Excel(TabularFile):
         super(Excel, self).__init__(path, mode = mode, **kwds)
         self.wb = xlrd.open_workbook(self.path, on_demand = True)
 
-    def __csvstring(self, rows):
+    def _csvstring(self, rows):
         buf = StringIO()
         cw = csv.writer(buf, quoting = csv.QUOTE_ALL, lineterminator = '\n')
         cw.writerows(rows)
@@ -358,20 +358,14 @@ class Excel(TabularFile):
                 x for x in sheet.row_values(n)] for n in xrange(sheet.nrows)]
 
     def preprocess(self):
-        self.nrows = sum(sheet.nrows for sheet in self.wb.sheets())
-        for sheet in self.wb.sheets(): ###HERE
+        self._nrows = sum(sheet.nrows for sheet in self.wb.sheets())
+        for sheet in self.wb.sheets():
             if sheet.nrows >= 1:
                 rows = self.reader(sheet)
-                __ = Csv.locate_header(rows[0:50])
-
-                kwds = {'skiprows' : __[0],
-                        'names' :__[1],
-                        'nrows' : sheet.nrows}
-
-                self(self.__csvstring(rows), **kwds)  ##CULPRIT, skips columns
+                kwds = self.checkheader(rows[0:50], {'nrows' : sheet.nrows})
+                self(self._csvstring(rows), **kwds)  ##CULPRIT, skips columns, FIXED ??
             elif sheet.nrows == 65536:
                 raise IncompleteExcelFile
-            yield kwds
 
 class Folder(OSPath):
     def __init__(self, path, pattern = '', recursive = False, files_only = False, setuplogging = True, **kwds):

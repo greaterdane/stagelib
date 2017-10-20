@@ -93,9 +93,11 @@ class Date(object):
         try:
             return pd.to_datetime(date, dayfirst = dayfirst, **kwds)
         except ValueError as e:
-            return try_date_formats(date)
+            return pd.to_datetime(try_date_formats(date))
 
     def disect(self):
         __ = map(lambda x: (x[0].split('_')[1], x[1]),
             attribute_generator(self.date.timetuple()))
-        return {self.FIELDMAP.get(k, k) : v for (k, v) in __}
+        return mergedicts({
+            self.FIELDMAP.get(k, k) : v for (k, v) in __
+                }, quarter = self.date.quarter)
