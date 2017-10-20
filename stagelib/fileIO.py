@@ -158,7 +158,7 @@ def parsexml(path, tagstart, tagstop):
             yield data
             data = []
 
-def xml2df(path, tagstart, tagstop)
+def xml2df(path, tagstart, tagstop):
     rows = []
     for data in parsexml(path, tagstart, tagstop):
         row = {}
