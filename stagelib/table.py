@@ -1,5 +1,6 @@
 import os
 import gc
+import shutil
 import logging
 import pandas as pd
 
@@ -47,7 +48,7 @@ class Table(GenericBase):
     def processfile(cls, path, dirname = '', outdir = 'processed', **kwds):
         obj = cls(path, **kwds)
         map(obj.write, obj)
-        movepath(obj.outfile, outdir)
+        shutil.move(obj.outfile, outdir)
         return obj
 
     def preprocess(self):
@@ -168,7 +169,7 @@ class StageTable(Table):
 
     def getfunc(self, name):
         fname = "to_{}".format(name.split('_')[0])
-        if name == 'text_fields'
+        if name == 'text_fields':
             fname = 'textclean'
         return getattr(pd.Series, fname)
 
@@ -180,6 +181,6 @@ class StageTable(Table):
 
         for name, fields in self.fieldgroups:
             if fields:
-                cols = df.filter_fields(items = fieldlist)
+                cols = df.filter_fields(items = fields)
                 df[cols] = df[cols].apply(self.getfunc(name))
         return self._conform(df)
