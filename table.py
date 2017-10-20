@@ -1,10 +1,11 @@
 import os
 import gc
+import shutil
 import logging
 import pandas as pd
 
 from generic import GenericBase, mergedicts, attrlist
-from fileIO import OSPath, File, Folder, chunkwriter, from_json_if_exists, to_json, mkpath, movepath, mkdir
+from fileIO import OSPath, File, Folder, chunkwriter, from_json_if_exists, to_json, mkpath, mkdir
 from sql import Database
 import dataframe
 from learner import learn_fields
@@ -47,7 +48,7 @@ class Table(GenericBase):
     def processfile(cls, path, dirname = '', outdir = 'processed', **kwds):
         obj = cls(path, **kwds)
         map(obj.write, obj)
-        movepath(obj.outfile, outdir)
+        shutil.move(obj.outfile, mkdir(outdir))
         return obj
 
     def preprocess(self):
@@ -64,7 +65,7 @@ class Table(GenericBase):
         if self.chunkidx > 1:
             kwds.update({'header' : False})
 
-        datawriter(self.outfile, df.to_csv(index = False, **kwds))
+        chunkwriter(self.outfile, df.to_csv(index = False, **kwds))
         self.info("data written to '%s'" % self.outfile)
 
 class StageTable(Table):
@@ -180,6 +181,6 @@ class StageTable(Table):
 
         for name, fields in self.fieldgroups:
             if fields:
-                cols = df.filter_fields(items = fieldlist)
+                cols = df.filter_fields(items = fields)
                 df[cols] = df[cols].apply(self.getfunc(name))
         return self._conform(df)
