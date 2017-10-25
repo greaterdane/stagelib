@@ -9,7 +9,6 @@ from nameparser import HumanName
 from generic import strip, to_single_space, remove_non_ascii
 from fileIO import OSPath, from_json, mkpath, mkdir
 import dataframe
-from dataframe import quickmapper
 
 re_GARBAGEPHONE = re.compile(r'[\.\-\(\)\s]+')
 re_PHONE = re.compile(r'^\d+$')
@@ -24,9 +23,11 @@ def get_phoneorfax(x):
         return phoneorfax
     return x
 
-def address_fields(df):
-    return df.filter_fields(items = USAddr.labels.keys())
-    
+def getname(name):
+    h = HumanName(name); h.capitalize()
+    return {'firstname' : "%s %s" % (h.first, h.middle),
+            'lastname' : "%s %s" % (h.last, h.suffix)}
+
 def parseaddresses(df):
     """
     Attempts to parse DataFrame addresses into individual components.
@@ -42,38 +43,22 @@ def parseaddresses(df):
      ----------
      df : pd.DataFrame
     """
-    amap = df.joinfields(df[address_fields(df)])\
+    fields = sorted(df.filter_fields(items = USAddress.labels.keys()))
+    addressmap = df.joinfields(fields = fields)\
         .dropna()\
-        .quickmap(USAddr.disect)\
+        .quickmap(USAddress.parse)\
         .to_dict()
 
-    return pd.DataFrame(amap.values(),
-        index = amap.keys())
+    addresses = pd.DataFrame(addressmap.values(),
+        index = addressmap.keys())
 
-def align_addresses(df):
-    addresses = parseaddresses(df)
+    #convert all states into two character units
+    #obtain zip codes using cities and states before validation
     addresses = addresses.loc[
         (addresses.valid) &\
-        (addresses.zip.notnull()) &\
-        (addresses.state.quickmap(lambda x: len(x) == 2))
-            ]
-
-    #####NOT DONE!!!
-    #addresses.reindex(df.index).combine_first(df)
-    #df.loc[addresses.index, address_fields(df)] = addresses
-    #return df.combine_first(addresses)
-
-@quickmapper
-def parse_name(name):
-    h = HumanName(name); h.capitalize()
-    return {'firstname' : "%s %s" % (h.first, h.middle),
-            'lastname' : "%s %s" % (h.last, h.suffix)}
-    
-def parse_names(series):
-    return pd.DataFrame([
-        d for d in np.where(series.isnull(),
-        {'firstname' : np.nan, 'lastname' : np.nan}, parse_name(series))
-            ], index = series.index).clean()
+        (addresses.zip.notnull()) #&\
+        #(addresses.state.quickmap(lambda x: len(x) == 2))
+            ] ##HERE!!
 
 class USAddress(object):
     LABELDIR = mkdir(*[os.path.dirname(__file__), 'config','addresslabels'])
@@ -88,6 +73,7 @@ class USAddress(object):
         self.orig = address
         self.prepped = self.preclean(address)
         self.components = self.disect()
+        self.components['fulladdress'] = self.prepped
 
     @classmethod
     def parse(cls, x):
@@ -103,7 +89,7 @@ class USAddress(object):
     def __repr__(self):
         return "\n".join(" : ".join(map(str, [k, v])) for k,v in self.components.items())
 
-    def get_parts(self):
+    def getparts(self):
         try:
             tagged_address, self.type = usaddress.tag(self.prepped)
         except usaddress.RepeatedLabelError as e:
@@ -120,7 +106,7 @@ class USAddress(object):
             return False
 
     def disect(self):
-        parts = self.get_parts(); d = {};
+        parts = self.getparts(); d = {};
         for mylabel, label in self.labels.items():
             part = ' '.join(parts[i] for i in label if i in parts)
             d.update({mylabel : (part if part else None)})

@@ -45,8 +45,8 @@ class Stage(GenericBase):
         template['datetime_fields'] = datetime_fields
         template['text_fields'] = text_fields
         template['numeric_fields'] = numeric_fields
-        to_json(cls.getschemapath(name))
-        self.info("'{}' registered".format(name))
+        to_json(cls.getschemapath(name), template)
+        print "'{}' registered".format(name)
 
     @classmethod
     def get_schemaconfig(cls, name):

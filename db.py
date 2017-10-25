@@ -29,8 +29,11 @@ def connected(func):
             conn.close()
     return inner
 
-def to_df(queryset):
-    return pd.DataFrame(list(queryset.dicts()))
+def to_records(query):
+    return list(query.dicts().execute())
+
+def to_df(query):
+    return pd.DataFrame(to_records(query))
 
 def qsdataframe(func):
     @wraps(func)
@@ -51,11 +54,15 @@ def getbasemodel(database):
                 cls.insert_many(data).execute()
 
         @classmethod
-        def tryinsert(cls, **kwds):
-            try:
-                return cls.insert(**kwds).execute()
-            except IntegrityError as e:
-                db_logger.info(e); pass
+        def tryinsert(cls, rows):
+            inserted = []
+            with cls._meta.database.atomic():
+                for kwds in rows:
+                    try:
+                        inserted.append(cls.insert(**kwds).execute())
+                    except IntegrityError as e:
+                        db_logger.info(e); pass
+                return len(inserted)
 
     dbproxy.initialize(database)
     return BaseModel
