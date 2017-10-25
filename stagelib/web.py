@@ -102,12 +102,12 @@ class HomeBrowser(mechanize.Browser, object):
         except mechanize.BrowserStateError:
             pass
 
-    def download(self, url, output_file = None):
-        if not output_file:
-            output_file = url
+    def download(self, url, outfile = None):
+        if not outfile:
+            outfile = url
 
-        if not OSPath.exists(output_file):
-            self.retrieve(url, output_file)[0]
+        if not OSPath.exists(outfile):
+            self.retrieve(url, outfile)[0]
 
     def checkurl(self, pattern, url):
         return isearch(pattern)(url)

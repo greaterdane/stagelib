@@ -9,6 +9,7 @@ from tabulate import tabulate
 import generic
 from generic import mergedicts, strip, to_single_space, remove_non_ascii, integer, floating_point
 from timeutils import Date, is_dayfirst
+from record import get_phoneorfax, getname
 
 pd.set_option('display.max_colwidth', -1)
 
@@ -115,7 +116,7 @@ def series_functions():
     #modifiers
     _int = quickmapper(integer)
     _float = quickmapper(floating_point)
-    textclean = quickmapper(lambda x: to_single_space(x))
+    to_text = quickmapper(lambda x: to_single_space(x))
     to_ascii = quickmapper(lambda x: remove_non_ascii(x))
     fuzzyprep = quickmapper(generic.fuzzyprep)
 
@@ -166,6 +167,18 @@ def series_functions():
 
     def disect_date(self, fields = [], **kwds):
         return pd.DataFrame(self.to_datetime(disect = True, **kwds).tolist())
+        
+    @quickmapper
+    def to_phone(x):
+        return get_phoneorfax(x)
+        
+    def to_name(self):
+        return pd.DataFrame([
+            d for d in self.modify(
+                series.isnull(),
+                {'firstname' : np.nan, 'lastname' : np.nan},
+                self.quickmap(getname)
+                    )], index = series.index).clean()
 
     def modify(self, mask, ifvalue, elsevalue = None):
         """
@@ -195,7 +208,7 @@ def series_functions():
 def dataframe_functions():
 
     def joinfields(df, fields = [], char = ' ', **kwds):
-        if fields:
+        if any(fields):
             kwds['items'] = fields
         joined = df.filter(**kwds)\
             .fillna('')\
@@ -204,7 +217,7 @@ def dataframe_functions():
 
         return pd.Series([
             np.nan if not i else i for i in joined.values
-                ], index = df.index).textclean()
+                ], index = df.index).to_text()
 
     def dup_cols(self):
         _ = self.columns.str.replace(r'\.[\d]+(?:[\.\d]+)?$', '')
@@ -248,7 +261,7 @@ def dataframe_functions():
                 series = series.combine_first(self[name])
         return series
 
-    def filter_fields(self, **kwds):
+    def filter_fields(self, **kwds): #filterfields
         return self.filter(**kwds).columns
 
     def drop_blank_fields(self):

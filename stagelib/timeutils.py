@@ -5,9 +5,12 @@ from dateutil.relativedelta import relativedelta
 import pytz
 import pandas as pd
 
-from generic import mergedicts, attribute_generator
+from generic import mergedicts, attribute_generator, logging_setup
+#from fileIO import importpandas
 
+#pd = None
 logger = logging.getLogger(__name__)
+logging_setup(logger = logger)
 re_DATE = re.compile(r'.*?(2\d{3})(?:[-\.\/])?(\d{2})(?:[-\.\/])?(\d{2}).*')
 re_EPOCH = re.compile(r'^\d{5}(?:\.0|$)')
 
@@ -33,7 +36,7 @@ def is_dayfirst(date):
             month = _[1]
         except IndexError:
             return False
-    logger.info("'%s' / MONTH - '%s'" % (date, month))
+    #logger.info("'%s' / MONTH - '%s'" % (date, month))
     try:
         if int(month) > 12:
             return True
@@ -85,6 +88,7 @@ class Date(object):
             date = str(date)
         return True if re_EPOCH.search(date) else False
 
+    #@importpandas
     def to_datetime(self, date, dayfirst = False, **kwds):
         if not date:
             return

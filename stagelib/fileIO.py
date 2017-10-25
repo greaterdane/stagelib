@@ -13,12 +13,18 @@ from timeutils import utcnow
 
 pd = None
 isearch = partial(lambda x: re.compile(x, re.I).search)
-re_NONFIELD = re.compile('^(?:\s+)?(?:(?:\$)?\d+(?:[-\/\.\s,]+|$)|[%s]|[\|,\t]+(?:\s+)?|$)' % punctuation)
 
-def importpandas():
-    global pd
-    if not pd:
-        import pandas as pd
+re_NONFIELD = re.compile('^(?:\s+)?(?:(?:\$)?\d+(?:[-\/\.\s,]+|$)|[%s]|[\|,\t]+(?:\s+)?|$)' % punctuation)
+PATHFUNCS = dir(os.path)
+
+def importpandas(func):
+    @wraps(func)
+    def inner(*args, **kwds):
+        global pd
+        if not pd:
+            import pandas as pd
+        return func(*args, **kwds)
+    return inner
 
 def pathdeco(func):
     @wraps(func)
@@ -102,13 +108,6 @@ def mkdir(dirname, *args):
         os.mkdir(_dirname)
     return _dirname
 
-@pathdeco
-def movepath(path, dest):
-    try:
-        shutil.move(path.path, mkdir(dest))
-    except shutil.Error as e:
-        path.error(e)
-
 @filehandler()
 def getmd5(fh):
     _md5 = hashlib.md5()
@@ -147,7 +146,7 @@ def from_json_if_exists(fh):
 def to_json(fh, data):
     fh.write(json.dumps(data, sort_keys = True, indent = 4,))
 
-def parsexml(path, tagstart, tagstop):
+def xmlLoop(path, tagstart, tagstop):
     iterxml = ET.iterparse(path)
     data = []
     while True:
@@ -158,17 +157,17 @@ def parsexml(path, tagstart, tagstop):
             yield data
             data = []
 
-def xml2df(path, tagstart, tagstop):
+def parsexml(path, tagstart, tagstop):
     rows = []
-    for data in parsexml(path, tagstart, tagstop):
+    for data in xmlLoop(path, tagstart, tagstop):
         row = {}
         for item in data:
             row.update(dict(item.values()[0]))
         rows.append(row)
-    return pd.DataFrame(rows)
+    return rows
 
+@importpandas
 def df2excel(output_file, **kwds):
-    importpandas()
     xlwriter = pd.ExcelWriter(output_file)
     for sheet_name, df in kwds.items():
         df.to_excel(xlwriter,
@@ -177,15 +176,22 @@ def df2excel(output_file, **kwds):
             encoding = 'utf-8')
     xlwriter.save()
 
+@importpandas
+def get_readcsvargs():
+    return pd.read_csv.func_code.co_varnames
+
 def is_nonfield(x):
     return re_NONFIELD.search(x)
 
 def locateheader(rows):
-    lens = Csv.rowlengths(rows)
+    lens = map(len ,rows)
     ml = max(lens)
     ix = lens.index(ml)
     for i, row in enumerate(rows[ix:], ix):
-        if any(is_nonfield(re.sub('\s+', ' ', str(x))) for x in row):
+        row = [re.sub('^$', 'blank.{}'.format(i2), str(x))
+               for i2, x in  enumerate(row)]
+        allblank = all(x.startswith('blank.') for x in row)
+        if any(is_nonfield(x) for x in row) or allblank:
             continue
         return i + 1, row
     else:
@@ -200,7 +206,7 @@ class OSPathMeta(type):
 
 class OSPath(GenericBase):
     __metaclass__ = OSPathMeta
-    is_key = isearch(r'((?<=get)(size|[a-z]time)|([a-z]+name|^ext$))')
+    _iskey = isearch(r'((?<=get)(size|[a-z]time)|([a-z]+name|^ext$))')
 
     def __init__(self, path, setuplogging = False, *args, **kwds):
         self.path = path
@@ -218,18 +224,18 @@ class OSPath(GenericBase):
         if not hasattr(self, '_properties'):
             self._properties = {}
             for k, v in self.__dict__.items():
-                if self.is_key(k):
-                    k = self.is_key(k).group(1)
-                    if isinstance(v, float):
-                        v = date.fromtimestamp(v).strftime("%Y-%m-%d %I:%M:%S")
-                    elif callable(v):
+                if self._iskey(k):
+                    k = self._iskey(k).group(1)
+                    if callable(v):
                         v = v()
+                        if 'time' in k:
+                            v = date.fromtimestamp(v).strftime("%Y-%m-%d %I:%M:%S")
                     self._properties.update({k : v})
         return self._properties
 
 class File(OSPath):
-    def __init__(self, path, mode = "rb", chunksize = 5 * (1024*1024), **kwds):
-        super(File, self).__init__(path, mode = mode, chunksize = chunksize, **kwds)
+    def __init__(self, path, setuplogging = False, mode = "rb", chunksize = 5 * (1024*1024), **kwds):
+        super(File, self).__init__(path, setuplogging = setuplogging, mode = mode, chunksize = chunksize, **kwds)
         self.kwds = kwds
         self.chunkidx = 0
 
@@ -246,14 +252,13 @@ class File(OSPath):
             return Csv(path, **kwds)
 
 class TabularFile(File):
-    def __init__(self, path, *args, **kwds):
-        super(TabularFile, self).__init__(path, *args, **kwds)
-        importpandas()
+    def __init__(self, path, setuplogging = True, *args, **kwds):
+        super(TabularFile, self).__init__(path, setuplogging = setuplogging, *args, **kwds)
+        self.items = []
 
+    @importpandas
     def __call__(self, data, **kwds):
-        if not hasattr(self, 'items'):
-            self.items = []
-
+        self.items = []
         kwds = mergedicts(kwds, self.kwds, lineterminator = '\n')
         if 'names' in kwds and 'converters' not in kwds:
             kwds['converters'] = {name : str for name in kwds['names']}
@@ -263,8 +268,8 @@ class TabularFile(File):
         else:
             kwds['na_values'].append('null')
 
+        self.info("Using kwds '{}' for 'pd.read_csv'".format(str(kwds)))
         self.items.append({
-            'sample' : pd.read_csv(StringIO(data), **mergedicts(kwds, nrows = 50)),
             'data' : io.BytesIO(data),
             'kwds' : kwds
                 })
@@ -280,12 +285,36 @@ class TabularFile(File):
         if hasattr(self, '_nrows'):
             __.update({'rows_original' : self._nrows})
         return __
+    
+    def preprocess(self):
+        raise NotImplementedError
 
     def checkheader(self, rows, kwds):
         if 'header' not in self.kwds:
             __ = locateheader(rows)
             return mergedicts(kwds, skiprows = __[0], names = __[1])
         return kwds
+    
+    @importpandas
+    def to_df(self, item):
+        return pd.read_csv(item['data'], **item['kwds'])
+
+    @importpandas
+    def dfreader(self):
+        self.preprocess()
+        self.chunkidx = 0
+        self.rowsread = 0
+
+        for item in self.items:
+            df = self.to_df(item)
+            self.rowsread += len(df)
+            self.chunkidx += 1
+            gc.collect()
+            yield df
+
+        self.info("{} rows read.".format(self.rowsread))
+        gc.disable()
+        gc.collect()
 
 class Csv(TabularFile):
     DELIMITERS = '|,\t;:'
@@ -295,14 +324,6 @@ class Csv(TabularFile):
         super(Csv, self).__init__(path, mode = mode, chunksize = chunksize, **kwds)
         self.fixcsv = '","\n' in self.testraw
         self.delimiter = self.sniff()
-
-    @staticmethod
-    def rowlengths(rows):
-        for row in rows:
-            for n in (0, -1):
-                while row and not row[n]:
-                    row.pop(n)
-        return map(len, rows)
 
     @staticmethod
     def createheader(length = 10):
@@ -390,19 +411,15 @@ class Excel(TabularFile):
 
 class Folder(OSPath):
     def __init__(self, path, pattern = '', recursive = False, files_only = False, setuplogging = True, **kwds):
-        self.search = lambda x, pattern = pattern: isearch(pattern)(x)
-        if self.search(path, pattern = r'(?:\.|^$)'):
+        rgx = re.compile(pattern)
+        self.search = lambda x, rgxpattern = rgx: rgxpattern.search(x)
+        if self.search(path, rgxpattern = re.compile(r'(?:\.|^$)')):
             path = os.getcwd()
         self.dupes = set()
         self.dist = set()
         self.recursive = recursive
         self.files_only = files_only
         super(Folder, self).__init__(path, setuplogging = setuplogging)
-
-    def __getitem__(self, n):
-        if hasattr(self, '_%s__cache' % self.__class__.__name__):
-            return list(self.__cache)[n]
-        raise IndexError
 
     @classmethod
     def listdir(cls, dirname, **kwds):
@@ -418,8 +435,8 @@ class Folder(OSPath):
         return extractdir
 
     @classmethod
+    @importpandas
     def table(cls, *args, **kwds):
-        importpandas()
         return pd.DataFrame([
             OSPath(path).properties for path in Folder.listdir(*args, **kwds)
                 ])

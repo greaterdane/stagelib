@@ -5,6 +5,7 @@ import string
 from datetime import datetime
 import logging
 import logging.handlers
+import logging.config
 from collections import MutableMapping
 from itertools import islice
 from functools import wraps, partial
@@ -17,8 +18,14 @@ def removehandlers(logger):
         handler.flush()
         handler.close()
 
-def configurelogging(logger, ch = None, fh = None, formatter = '', level = logging.DEBUG, logdir = LOGDIR, extrakeys = []):
+def logging_setup(name = None, logger = None, logging_config = None, ch = None, fh = None, formatter = '', level = logging.DEBUG, logdir = LOGDIR, extrakeys = []):
+    if not logger:
+        logger = logging.getLogger(name or None)
     removehandlers(logger)
+    if logging_config:
+        logging.dictConfig(logging_config)
+        return
+
     fmtstring = "%(levelname)s|%(message)s|%(asctime)s"
     if extrakeys:
         fmtstring = fmtstring + "|" + '|'.join("%" + "(%s)s" % k for k in extrakeys)
@@ -40,7 +47,7 @@ def configurelogging(logger, ch = None, fh = None, formatter = '', level = loggi
     logger.setLevel(level)
     logger.addHandler(fh)
     logger.addHandler(ch)
-    return logger
+    return
 
 def mergedicts(*dictionaries, **kwds):
     result = {}
@@ -222,7 +229,7 @@ class EasyInit(object):
             obj._logger = logger
 
         removehandlers(obj._logger)
-        configurelogging(obj._logger, extrakeys = extra.keys())
+        logging_setup(logger = obj._logger, extrakeys = extra.keys())
         for level in ['info', 'debug', 'warning', 'error', 'critical']:
             setattr(obj, level, lambda msg, level = level: getattr(obj._logger, level)(msg, extra = extra))
         return obj
