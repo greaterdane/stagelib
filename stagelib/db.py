@@ -1,18 +1,21 @@
 import logging
 from functools import wraps
+import pandas as pd
 from peewee import *
+from playhouse.shortcuts import RetryOperationalError
 
+from generic import reversedict, logging_setup, chunker
 from fileIO import from_json
 
-db_logger = logging.getLogger('db')
-peewee_logger = logging.getLogger('peewee')
+db_logger = logging_setup(name = 'db', level = logging.INFO)
+#peewee_logger = logging_setup(name = 'peewee', level = logging.INFO)
 
-def getlogin(path = 'login.json'):
+def _get_credentials(path = 'login.json'):
     return from_json(path)
 
 def getdb(dbname, flavor = 'mysql', path = 'login.json', hostalias = 'localhost', **kwds):
     if not kwds:
-        kwds = getlogin(path)[hostalias]
+        kwds = _get_credentials(path)[hostalias]
     return dbclasses()[flavor](dbname, **kwds)
 
 def dbclasses():
@@ -29,45 +32,90 @@ def connected(func):
             conn.close()
     return inner
 
-def to_records(query):
-    return list(query.dicts().execute())
-
-def to_df(query):
-    return pd.DataFrame(to_records(query))
-
-def qsdataframe(func):
+def _dataframe(func):
     @wraps(func)
-    def inner(*args, **kwds):
-        return to_df(func(*args, **kwds))
+    def inner(cls, *args, **kwds):
+        return cls.to_dataframe(func(*args, **kwds))
     return inner
 
-def getbasemodel(database):
+def _insertdecorator(func):
+    @wraps(func)
+    def inner(cls, rows, chunksize = 2500):
+        tablename = cls._meta.db_table
+        db_logger.info("Insertion queued for table '{}' ({} rows)".format(tablename, len(rows)))
+        rowgroups = chunker(rows, chunksize)
+        inserted = 0
+        with cls._meta.database.atomic():
+            for _rows in rowgroups:
+                db_logger.info("Inserted {} rows...".format(len(_rows)))
+                _inserted = func(cls, _rows)
+                inserted += _inserted
+                db_logger.info("{} rows inserted".format(_inserted))
+        db_logger.info("{} rows successfully inserted into '{}'".format(inserted, tablename))
+        return inserted
+    return inner
+
+def get_basemodel(database):
     dbproxy = Proxy()
     class BaseModel(Model):
         class Meta:
             database = dbproxy
 
         @classmethod
-        def bulkinsert(cls, data):
-            db_logger.info("{} rows queued for insert into {}".format(len(data), cls._meta.db_table))
-            with cls._meta.database.atomic():
-                cls.insert_many(data).execute()
+        @_insertdecorator
+        def bulkinsert(cls, rows, **kwds):
+            return cls.insert_many(rows).execute()
 
         @classmethod
-        def tryinsert(cls, rows):
+        @_insertdecorator
+        def tryinsert(cls, rows, **kwds):
             inserted = []
-            with cls._meta.database.atomic():
-                for kwds in rows:
-                    try:
-                        inserted.append(cls.insert(**kwds).execute())
-                    except IntegrityError as e:
-                        db_logger.info(e); pass
-                return len(inserted)
+            for row in rows:
+                try:
+                    inserted.append(cls.insert(**row).execute())
+                except IntegrityError as e:
+                    db_logger.error(e)
+                except OperationalError as e:
+                    db_logger.error(e)
+            return len(inserted)
+
+        @classmethod
+        def insertdf(cls, df, extrafields = [], bulk = False, **kwds):
+            fields = [field for field in df.filter_fields(items = cls._meta.fields.keys())
+                      if field not in extrafields]
+
+            rows = df.dropna(subset = fields, how = 'all')\
+                .filter(items = fields + extrafields)\
+                .fillna('').to_dict(orient = 'records')
+
+            if not rows:
+                db_logger.warning("Nothing to insert.  All fields ('{}') are blank.".format(', '.join(fields)))
+                return
+
+            if bulk:
+                return cls.bulkinsert(rows, **kwds)
+            return cls.tryinsert(rows, **kwds)
+
+        @classmethod
+        def to_records(cls, query):
+            return list(query.dicts().execute())
+        
+        @classmethod
+        def to_dataframe(cls, query):
+            return pd.DataFrame(cls.to_records(query))
+
+        @classmethod
+        def getdict(cls, field, reversed = False):
+            __ = {row.id : getattr(row, field) for row in cls.select()}
+            if reversed:
+                return reversedict(__)
+            return __
+            
 
     dbproxy.initialize(database)
     return BaseModel
 
-class CustomMySQLDatabase(MySQLDatabase):
+class CustomMySQLDatabase(RetryOperationalError, MySQLDatabase):
 
     @connected
     def loadcsv(self, cursor, path, table, overwrite = False, fields = [], lineterminator = '\n'):
@@ -84,7 +132,7 @@ class CustomMySQLDatabase(MySQLDatabase):
     
         db_logger.info("Importing '%s' into '%s'" % (path, table))
         
-        rows_imported = cursor.execute("""
+        return cursor.execute("""
             LOAD DATA LOCAL INFILE "{path}"
             INTO TABLE {table}
             FIELDS TERMINATED BY ','\n
@@ -97,5 +145,3 @@ class CustomMySQLDatabase(MySQLDatabase):
                     fields = ','.join("`%s`" % s for s in fields),
                     lineterminator = lineterminator
                         ))
-
-        return rows_imported

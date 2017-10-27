@@ -24,7 +24,7 @@ def logging_setup(name = None, logger = None, logging_config = None, ch = None, 
     removehandlers(logger)
     if logging_config:
         logging.dictConfig(logging_config)
-        return
+        return logger
 
     fmtstring = "%(levelname)s|%(message)s|%(asctime)s"
     if extrakeys:
@@ -47,7 +47,7 @@ def logging_setup(name = None, logger = None, logging_config = None, ch = None, 
     logger.setLevel(level)
     logger.addHandler(fh)
     logger.addHandler(ch)
-    return
+    return logger
 
 def mergedicts(*dictionaries, **kwds):
     result = {}

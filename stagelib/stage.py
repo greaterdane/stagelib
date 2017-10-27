@@ -19,12 +19,13 @@ class Stage(GenericBase):
     SCHEMADIR = mkdir(CONFIGDIR, 'schema')
     FIELDSPATH = mkpath(CONFIGDIR, 'fieldsconfig.json')
 
-    def __init__(self, schname, fieldspath = '', **kwds):
+    def __init__(self, schname, fieldspath = '', log_fieldlearner = False, **kwds):
         self.name = schname
         self.fieldspath = self.FIELDSPATH
         if fieldspath:
             self.fieldspath = fieldspath
 
+        self.log_fieldlearner = log_fieldlearner
         self.load()
         super(Stage, self).__init__()
 
@@ -117,10 +118,11 @@ class Stage(GenericBase):
             table = self.name,
             fieldspath = self.fieldspath, **kwds)
 
-        self.fieldsmap.update(__)
-        for k, v in self.fieldsmap.items():
-            if k in df.columns:
-                self.info(learnlogfmt(field = k, choice = v))
+        if self.log_fieldlearner:
+            self.fieldsmap.update(__)
+            for k, v in self.fieldsmap.items():
+                if k in df.columns:
+                    self.info(learnlogfmt(field = k, choice = v))
 
     def _conform(self, df, **kwds):
         return self.conform(df, self.name,
@@ -149,6 +151,8 @@ class Stage(GenericBase):
                 func = self._getfunc(name)
                 if not func:
                     continue
+
+                self.info("Applying function '{}' to fields '{}'".format(func.func_name, ', '.join(map(str, flds))))
                 df[flds] = df[flds].apply(func)
         gc.collect()
         return self._conform(df)

@@ -107,6 +107,9 @@ def mkdir(dirname, *args):
     if not OSPath.exists(_dirname):
         os.mkdir(_dirname)
     return _dirname
+    
+def get_homedir():
+    return OSPath.dirname(__file__)
 
 @filehandler()
 def getmd5(fh):
@@ -165,6 +168,27 @@ def parsexml(path, tagstart, tagstop):
             row.update(dict(item.values()[0]))
         rows.append(row)
     return rows
+
+@importpandas
+def readtable(path, **kwds):
+    fn = pd.read_excel
+    while True:
+        if is_zipfile(path):
+            with zipfile.ZipFile(path) as zf:
+                fh = zf.open(zf.filelist[0].filename)
+                x = fh.peek()
+        else:
+            fh = open(path)
+            x = fh.readline()
+            fh.seek(0,0)
+        try:
+            return fn(fh, **kwds)
+        except xlrd.XLRDError:
+            kwds.update({'delimiter' : Csv.sniff(x), 'quoting' : 1, 'low_memory' : False, 'error_bad_lines' : False})
+            fn = pd.read_csv
+            continue
+        finally:
+            fh.close()
 
 @importpandas
 def df2excel(output_file, **kwds):
@@ -323,7 +347,14 @@ class Csv(TabularFile):
     def __init__(self, path, mode = "U", chunksize = 79650, **kwds):
         super(Csv, self).__init__(path, mode = mode, chunksize = chunksize, **kwds)
         self.fixcsv = '","\n' in self.testraw
-        self.delimiter = self.sniff()
+        self.delimiter = self.sniff(self.testraw)
+
+    @classmethod
+    def sniff(cls, x):
+        for k, v in Counter(x).most_common():
+            if k in cls.DELIMITERS:
+                return k
+        raise csv.Error, "Delimiter undetermined."
 
     @staticmethod
     def createheader(length = 10):
@@ -353,15 +384,6 @@ class Csv(TabularFile):
     @filehandler(mode = "U")
     def head(self, n = 50):
         for i in chunker(self, n): return ''.join(i)
-
-    def sniff(self):
-        counts = filter(lambda x: x[0] in Csv.DELIMITERS,
-            Counter(self.testraw).most_common())
-
-        for k,v in counts:
-            if k in Csv.DELIMITERS:
-                return str(k)
-        raise csv.Error, "Delimiter undetermined."
 
     def reader(self, data):
         return [i for i in csv.reader(StringIO(data),

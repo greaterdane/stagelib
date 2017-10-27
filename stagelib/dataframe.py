@@ -7,9 +7,8 @@ import numpy as np
 from tabulate import tabulate
 
 import generic
-from generic import mergedicts, strip, to_single_space, remove_non_ascii, integer, floating_point
+from generic import mergedicts, strip, to_single_space, remove_non_ascii, fuzzyprep, integer, floating_point
 from timeutils import Date, is_dayfirst
-from record import get_phoneorfax, getname
 
 pd.set_option('display.max_colwidth', -1)
 
@@ -116,8 +115,8 @@ def series_functions():
     #modifiers
     _int = quickmapper(integer)
     _float = quickmapper(floating_point)
-    to_text = quickmapper(lambda x: to_single_space(x))
-    to_ascii = quickmapper(lambda x: remove_non_ascii(x))
+    to_text = quickmapper(to_single_space)
+    to_ascii = quickmapper(remove_non_ascii)
     fuzzyprep = quickmapper(generic.fuzzyprep)
 
     @dtypeobject
@@ -167,18 +166,6 @@ def series_functions():
 
     def disect_date(self, fields = [], **kwds):
         return pd.DataFrame(self.to_datetime(disect = True, **kwds).tolist())
-        
-    @quickmapper
-    def to_phone(x):
-        return get_phoneorfax(x)
-        
-    def to_name(self):
-        return pd.DataFrame([
-            d for d in self.modify(
-                series.isnull(),
-                {'firstname' : np.nan, 'lastname' : np.nan},
-                self.quickmap(getname)
-                    )], index = series.index).clean()
 
     def modify(self, mask, ifvalue, elsevalue = None):
         """

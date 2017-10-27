@@ -1,7 +1,7 @@
 import os, sys
 import logging
 from argparse import ArgumentParser, RawTextHelpFormatter
-from fileio import Folder, File
+from fileIO import Folder, File
 
 class Program(object):
     def __init__(self, description = '', **kwds):
@@ -56,14 +56,13 @@ class Command(object):
 
     def execute(self):
         self.set_context_from_args()
-        print self.__class__.__name__
 
 class DataSlayer(Program):
     def __init__(self, **kwds):
         super(DataSlayer, self).__init__(description = "Command line tool for data preparation.", **kwds)
 
     def _add_switches(self): # add arguments here.
-        self.parser.add_argument('dirname', nargs = '?', help = "Directory containing input files.  Defaults to your current working directory.", default = os.getcwd())
+        self.parser.add_argument('--dirname', help = "Directory containing input files.  Defaults to your current working directory.", default = os.getcwd())
         self.parser.add_argument('-i', nargs = '?', help = "One or more files for input.", dest = 'infile')
         self.parser.add_argument('-o', help = "Output file.", dest = 'outfile')
         self.parser.add_argument('-m', '--pattern', help = "Pattern to match when filtering a directory, e.g. '*.csv' or 'file.*?.json' (regexes are allowed).", dest = 'pattern')
@@ -89,18 +88,12 @@ class Listdir(Command):
     #def execute(self):
     #    pass
 
-class LoadCsv(DBCommand):
-    pass
-    #def execute(self):
-    #    pass
-
 if __name__ == '__main__':
     logging.basicConfig(format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %I:%M:%S %p')
     
     ## Add command maps here.
     sub_command_map = {
         'listdir': {'class': Listdir, 'desc': 'Show the contents of a given directory.'},
-        'loadcsv': {'class': LoadCsv, 'desc': 'Import one or more csv files into mysql database.'},
             }
 
     DataSlayer.start(sub_command_map) # launch the program

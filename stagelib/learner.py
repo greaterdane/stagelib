@@ -22,6 +22,7 @@ update_message = "'{field}' was renamed '{choice}'."
 _char = '='
 border = _char * 13
 
+#learnfields
 def learn_fields(df, fields_map, fields = [], table = '', path = '', strict = True):
     field_updates = {}
     if all(i in fields for i in df.columns):

@@ -5,7 +5,7 @@ import logging
 import pandas as pd
 
 from generic import GenericBase, mergedicts, attrlist
-from fileIO import OSPath, File, Folder, chunkwriter, from_json_if_exists, to_json, mkpath, movepath, mkdir
+from fileIO import OSPath, File, Folder, chunkwriter, from_json_if_exists, to_json, mkpath, mkdir
 from sql import Database
 import dataframe
 from learner import learn_fields
@@ -48,7 +48,7 @@ class Table(GenericBase):
     def processfile(cls, path, dirname = '', outdir = 'processed', **kwds):
         obj = cls(path, **kwds)
         map(obj.write, obj)
-        shutil.move(obj.outfile, outdir)
+        shutil.move(obj.outfile, mkdir(outdir))
         return obj
 
     def preprocess(self):
@@ -134,7 +134,7 @@ class StageTable(Table):
             isinstance(i[1], list) and i[0].endswith('_fields')]
 
     def _conform(self, df, **kwds):
-        return self.conform(df, self.table, fields_map = self.fields_map, **kwds)
+        return self.conform(df, self.table, fields_map = self.fields_map, path = self.file.basename(), **kwds)
 
     def __iter__(self):
         for df in super(StageTable, self).__iter__():
@@ -168,10 +168,7 @@ class StageTable(Table):
             self.field_mapper()
 
     def getfunc(self, name):
-        fname = "to_{}".format(name.split('_')[0])
-        if name == 'text_fields':
-            fname = 'textclean'
-        return getattr(pd.Series, fname)
+        return getattr(pd.Series, "to_{}".format(name.split('_')[0]))
 
     def normalize(self, df, *args, **kwds):
         df = df.rename(columns = self.fields_map).clean(*self.omit)
