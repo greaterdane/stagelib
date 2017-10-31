@@ -89,7 +89,7 @@ def get_basemodel(database):
                 .fillna('').to_dict(orient = 'records')
 
             if not rows:
-                db_logger.warning("Nothing to insert.  All fields ('{}') are blank.".format(', '.join(fields)))
+                db_logger.warning("Nothing to insert ({}).  All fields ('{}') are blank.".format(cls.__name__, ', '.join(fields)))
                 return
 
             if bulk:

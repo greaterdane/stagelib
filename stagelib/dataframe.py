@@ -198,7 +198,7 @@ def dataframe_functions():
         if any(fields):
             kwds['items'] = fields
         joined = df.filter(**kwds)\
-            .fillna('')\
+            .fillna('').astype(str)\
             .apply(lambda x: char.join(x), axis = 1)\
             .clean()
 

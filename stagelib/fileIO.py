@@ -79,7 +79,7 @@ def fileunzip(zipname, outdir = '', switches = [], recursive = False, overwrite 
 
     mkdir(outdir)
     cmd = 'unzip %s "%s" -d "%s"' % (' '.join(switches), zipname, outdir)
-    p = subprocess.Popen(command, stdin = PIPE)
+    p = subprocess.Popen(cmd, stdin = PIPE)
     p.communicate(input = overwrite)
     if recursive:
         for zn in Folder.listdir(outdir, recursive = True):
@@ -353,7 +353,7 @@ class Csv(TabularFile):
     def sniff(cls, x):
         for k, v in Counter(x).most_common():
             if k in cls.DELIMITERS:
-                return k
+                return str(k)
         raise csv.Error, "Delimiter undetermined."
 
     @staticmethod
