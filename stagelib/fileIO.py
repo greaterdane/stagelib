@@ -1,4 +1,4 @@
-import os, sys, io, re, gc, csv, xlrd, json, zipfile
+import os, sys, io, csv, re, gc, xlrd, json, zipfile
 import xml.etree.cElementTree as ET
 import shutil, subprocess, hashlib, contextlib
 from subprocess import PIPE
@@ -386,6 +386,7 @@ class Csv(TabularFile):
         for i in chunker(self, n): return ''.join(i)
 
     def reader(self, data):
+        data = remove_non_ascii(data)
         return [i for i in csv.reader(StringIO(data),
             delimiter = self.delimiter, quoting = 1)]
 
