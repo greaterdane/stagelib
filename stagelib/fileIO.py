@@ -1,3 +1,4 @@
+from __future__ import division
 import os, sys, io, csv, re, gc, xlrd, json, zipfile
 import xml.etree.cElementTree as ET
 import shutil, subprocess, hashlib, contextlib
@@ -10,6 +11,7 @@ from functools import partial, wraps
 
 from generic import *
 from timeutils import utcnow
+from learner import learn_fields
 
 pd = None
 isearch = partial(lambda x: re.compile(x, re.I).search)
@@ -46,7 +48,7 @@ if_not_exists = presence(exists = False)
 
 @contextlib.contextmanager
 def fileopener(fh, mode = "rb", *args, **kwds):
-    if isinstance(fh, (basestring, OSPath)):
+    if isinstance(fh, (basestring, OSPath, Csv, Excel)):
         fh = io.open(str(fh), mode, **kwds)
     try:
         yield fh
@@ -61,31 +63,6 @@ def filehandler(mode = "rb"):
                 return func(fh, *args, **kwds)
         return inner
     return decorator
-
-def is_zipfile(path):
-    return zipfile.is_zipfile(path) and r'.xls' not in path
-
-def filezip(newzipfile, path, mode = 'w', **kwds):
-    with zipfile.ZipFile(newzipfile, mode = 'w', **kwds) as zf:
-        zf.write(path, OSPath.basename(path))
-
-filezip64 = partial(filezip,
-    allowZip64 = True,
-    compression = zipfile.ZIP_DEFLATED)
-
-def fileunzip(zipname, outdir = '', switches = [], recursive = False, overwrite = 'n'):
-    if not outdir:
-        outdir = defaultdir(zipname)
-
-    mkdir(outdir)
-    cmd = 'unzip %s "%s" -d "%s"' % (' '.join(switches), zipname, outdir)
-    p = subprocess.Popen(cmd, stdin = PIPE)
-    p.communicate(input = overwrite)
-    if recursive:
-        for zn in Folder.listdir(outdir, recursive = True):
-            if is_zipfile(zn) and zn != zipname:
-                fileunzip(zn, switches = switches)
-    return outdir
 
 @pathdeco
 def defaultdir(path):
@@ -110,6 +87,29 @@ def mkdir(dirname, *args):
     
 def get_homedir():
     return OSPath.dirname(__file__)
+
+def is_zipfile(path):
+    return zipfile.is_zipfile(path) and r'.xls' not in path
+
+def filezip(newzipfile, path, mode = 'w', **kwds):
+    with zipfile.ZipFile(newzipfile, mode = 'w', **kwds) as zf:
+        zf.write(path, OSPath.basename(path))
+
+filezip64 = partial(filezip,
+    allowZip64 = True,
+    compression = zipfile.ZIP_DEFLATED)
+
+def fileunzip(zipname, outdir = None, recursive = False, **kwds):
+    if not is_zipfile(zipname):
+        return
+    if not outdir:
+        outdir = defaultdir(zipname)
+    with zipfile.ZipFile(zipname) as zf:
+        zf.extractall(outdir, **kwds)
+    if recursive:
+        for path in Folder.listdir(outdir):
+            fileunzip(path)
+    return outdir
 
 @filehandler()
 def getmd5(fh):
@@ -171,7 +171,7 @@ def parsexml(path, tagstart, tagstop):
 
 @importpandas
 def readtable(path, **kwds):
-    fn = pd.read_excel
+    func = pd.read_excel
     while True:
         if is_zipfile(path):
             with zipfile.ZipFile(path) as zf:
@@ -182,10 +182,10 @@ def readtable(path, **kwds):
             x = fh.readline()
             fh.seek(0,0)
         try:
-            return fn(fh, **kwds)
+            return func(fh, **kwds)
         except xlrd.XLRDError:
             kwds.update({'delimiter' : Csv.sniff(x), 'quoting' : 1, 'low_memory' : False, 'error_bad_lines' : False})
-            fn = pd.read_csv
+            func = pd.read_csv
             continue
         finally:
             fh.close()
@@ -201,25 +201,23 @@ def df2excel(output_file, **kwds):
     xlwriter.save()
 
 @importpandas
-def get_readcsvargs():
-    return pd.read_csv.func_code.co_varnames
+def getcsvkwds(kwds):
+    return filterdict(kwds, pd.read_csv.func_code.co_varnames)
 
 def is_nonfield(x):
     return re_NONFIELD.search(x)
 
 def locateheader(rows):
-    lens = map(len ,rows)
+    lens = map(len, [filter(lambda x: x != '', row) for row in rows])
     ml = max(lens)
     ix = lens.index(ml)
     for i, row in enumerate(rows[ix:], ix):
-        row = [re.sub('^$', 'blank.{}'.format(i2), str(x))
-               for i2, x in  enumerate(row)]
-        allblank = all(x.startswith('blank.') for x in row)
-        if any(is_nonfield(x) for x in row) or allblank:
+        blanks = map(str.strip, row).count('')
+        if blanks/ml >= 0.5 or any(is_nonfield(x) for x in row):
             continue
         return i + 1, row
     else:
-        return ix, Csv.createheader(ml)
+        return ix, Tabular.createheader(ml)
 
 class OSPathMeta(type):
     _methods = attrdict(os.path)
@@ -261,12 +259,15 @@ class File(OSPath):
     def __init__(self, path, setuplogging = False, mode = "rb", chunksize = 5 * (1024*1024), **kwds):
         super(File, self).__init__(path, setuplogging = setuplogging, mode = mode, chunksize = chunksize, **kwds)
         self.kwds = kwds
-        self.chunkidx = 0
 
     def __iter__(self):
         with open(self.path, self.mode) as fh:
             for i, data in enumerate(chunker(fh, chunksize = self.chunksize)):
-                self.chunkidx = i; yield data
+                yield ''.join(data)
+
+    @classmethod
+    def countrows(cls, path, **kwds):
+        return cls.guess(path)._countrows(**kwds)
 
     @staticmethod
     def guess(path, **kwds):
@@ -274,75 +275,83 @@ class File(OSPath):
             return Excel(path, **kwds)
         except xlrd.XLRDError:
             return Csv(path, **kwds)
+            
+    def _countrows(self, chunksize = 500000, mode = "U"):
+        if not hasattr(self, '_nrows'):
+            if isinstance(self, Excel):
+                self._nrows = sum(i.nrows for i in self.sheets)
+                return self._nrows
 
-class TabularFile(File):
+            rows, offset, size = 0, 0, self.getsize()
+            with open(self.path, mode = mode) as fh:
+                while offset < size:
+                    data = fh.read(chunksize)
+                    offset = fh.tell()
+                    rows += data.count('\n')
+                self._nrows = rows; return rows
+        return self._nrows
+
+class Tabular(File):
+    NULLS = ['null', 'NULL', 'None', 'none']
+
     def __init__(self, path, setuplogging = True, *args, **kwds):
-        super(TabularFile, self).__init__(path, setuplogging = setuplogging, *args, **kwds)
-        self.items = []
-
-    @importpandas
-    def __call__(self, data, **kwds):
-        self.items = []
-        kwds = mergedicts(kwds, self.kwds, lineterminator = '\n')
-        if 'names' in kwds and 'converters' not in kwds:
-            kwds['converters'] = {name : str for name in kwds['names']}
-
+        super(Tabular, self).__init__(path, setuplogging = setuplogging, *args, **kwds)
         if 'na_values' not in kwds:
-            kwds['na_values'] = ['null']
+            kwds['na_values'] = self.NULLS
         else:
-            kwds['na_values'].append('null')
+            kwds['na_values'].extend(self.NULLS)
+        self.kwds = mergedicts(kwds, self.kwds, lineterminator = '\n')
 
-        self.info("Using kwds '{}' for 'pd.read_csv'".format(str(kwds)))
-        self.items.append({
-            'data' : io.BytesIO(data),
-            'kwds' : kwds
-                })
+    @staticmethod
+    def createheader(length = 10):
+        return map(lambda x: "field.%s.of.%s" % (x[0], length),
+            enumerate(xrange(1, length + 1), 1))
 
-    def __getitem__(self, val):
-        if hasattr(self, 'items'):
-            return self.items[val]
-        raise IndexError
+    @staticmethod
+    def learnfields(df, fieldsmap, **kwds):
+        fieldspath = kwds.pop('fieldspath', 'fieldsconfig.json')
+        fieldsmap = mergedicts(from_json(fieldspath),
+            learn_fields(df, fieldsmap, **kwds))
+        to_json(fieldspath, fieldsmap)
+        return fieldsmap
+
+    @staticmethod
+    def renamefields(df, names, **kwds):
+        __ = Tabular.learnfields(df, kwds.pop('fieldsmap', {}), **kwds)
+        return [__[name] for name in names]
 
     @property
     def properties(self):
-        __ = super(TabularFile, self).properties
-        if hasattr(self, '_nrows'):
-            __.update({'rows_original' : self._nrows})
-        return __
-    
-    def preprocess(self):
-        raise NotImplementedError
+        return mergedicts(rows_original = self._countrows(),
+            **super(Tabular, self).properties)
 
-    def checkheader(self, rows, kwds):
-        if 'header' not in self.kwds:
+    def preprocess(self, learnfields = False, **kwds):
+        self.kwds = filterdict(self.kwds, ['mode', 'lineterminator'], inverse = True)
+        self._countrows()
+
+    def checkheader(self, rows):
+        if not ('header' in self.kwds or 'skiprows' in self.kwds or 'names' in self.kwds):
             __ = locateheader(rows)
-            return mergedicts(kwds, skiprows = __[0], names = __[1])
-        return kwds
-    
+            return dict(skiprows = __[0], names = __[1], header = None)
+        return {}
+
+    @classmethod
     @importpandas
-    def to_df(self, item):
-        return pd.read_csv(item['data'], **item['kwds'])
+    def _iterdataframe(cls, func):
+        def inner(self, *args, **kwds):
+            self.kwds = filterdict(self.kwds, 'lineterminator', 'mode')
+            self.preprocess(**kwds)
+            self.rows = 0
+            for df in func(self, *args):
+                self.rows += len(df)
+                yield df; gc.collect()
+            self.info("{} rows read.".format(self.rows))
+            gc.disable(); gc.collect()
+        return inner
 
-    @importpandas
-    def dfreader(self):
-        self.preprocess()
-        self.chunkidx = 0
-        self.rowsread = 0
-
-        for item in self.items:
-            df = self.to_df(item)
-            self.rowsread += len(df)
-            self.chunkidx += 1
-            gc.collect()
-            yield df
-
-        self.info("{} rows read.".format(self.rowsread))
-        gc.disable()
-        gc.collect()
-
-class Csv(TabularFile):
+class Csv(Tabular):
     DELIMITERS = '|,\t;:'
-    fix = lambda x: x.replace('","\n', '"\n')
+    re_BADTAIL = re.compile(r'(^.*?"),"\n', re.M)
 
     def __init__(self, path, mode = "U", chunksize = 79650, **kwds):
         super(Csv, self).__init__(path, mode = mode, chunksize = chunksize, **kwds)
@@ -356,11 +365,6 @@ class Csv(TabularFile):
                 return str(k)
         raise csv.Error, "Delimiter undetermined."
 
-    @staticmethod
-    def createheader(length = 10):
-        return map(lambda x: "field.%s.of.%s" % (x[0], length),
-            enumerate(xrange(1, length + 1), 1))
-
     @property
     def testraw(self):
         return self.head()
@@ -369,68 +373,98 @@ class Csv(TabularFile):
     def testrows(self):
         __ = self.testraw
         if self.fixcsv: __ = self.fix(__)
-        return self.reader(self.testraw)
+        return self.reader(__)
 
     @property
     def rules(self):
-        kwds = self.checkheader(self.testrows,
-            {'skiprows' : self.kwds.get('skiprows', 0)})
-
-        if self.chunkidx > 0:
-            kwds['skiprows'] = 0
-        return mergedicts(kwds,
-            delimiter = self.delimiter)
+        if not hasattr(self, '_rules'):
+            self._rules = mergedicts(delimiter = self.delimiter,
+                **self.checkheader(self.testrows))
+        return self._rules
 
     @filehandler(mode = "U")
     def head(self, n = 50):
         for i in chunker(self, n): return ''.join(i)
 
+    def fix(self, data):
+        return re_BADTAIL.sub(r'\1\n', data)
+
+    def preprocess(self, **kwds):
+        super(Csv, self).preprocess()
+        if kwds.pop('learnfields', False):
+            df = pd.read_csv(StringIO(self.testraw), nrows = 20, **self.rules)
+            self._rules['names'] = self.renamefields(df, self._rules['names'],
+                **mergedicts(path = self.path, **kwds))
+
+        if self.fixcsv:
+            tmpfile = self.path.replace('.csv', '.temp')
+            for data in self:
+                chunkwriter(tmpfile, self.fix(data)) #chunkwrite to tempfile, delete original, rename back to original
+                gc.disable(); gc.collect()
+            os.remove(self.path)
+            os.rename(tmpfile, self.path)
+
     def reader(self, data):
-        data = remove_non_ascii(data)
-        return [i for i in csv.reader(StringIO(data),
+        buf = StringIO(remove_non_ascii(data))
+        return [i for i in csv.reader(buf,
             delimiter = self.delimiter, quoting = 1)]
 
-    def preprocess(self):
-        self._nrows = 0
-        for i, data in enumerate(self):
-            self._nrows += len(data)
-            data = ''.join(data)
-            if self.fixcsv:
-                data = self.fix(data)
-
-            if self.delimiter == '|':
-                data = data.replace(' | ', ' - ')
-            self(data, **mergedicts(self.kwds, self.rules))
-            gc.collect()
+    @Tabular._iterdataframe
+    def dfreader(self, **kwds):
+        if not 'chunksize' in self.kwds:
+            self.kwds['chunksize'] = self.chunksize
+        for df in pd.read_csv(self.path, **mergedicts(self.rules, self.kwds)):
+            yield df
 
 class IncompleteExcelFile(Exception):
     def __init__(self):
         super(IncompleteExcelFile, self).__init__("This sheet contains exactly 65536 rows.  Data may be incomplete.")
 
-class Excel(TabularFile):
+class Excel(Tabular):
     def __init__(self, path, mode = 'rb', **kwds):
         super(Excel, self).__init__(path, mode = mode, **kwds)
         self.wb = xlrd.open_workbook(self.path, on_demand = True)
 
-    def _csvstring(self, rows):
+    def _csvbuffer(self, rows):
         buf = StringIO()
         cw = csv.writer(buf, quoting = csv.QUOTE_ALL, lineterminator = '\n')
         cw.writerows(rows)
-        return buf.getvalue()
+        return StringIO(buf.getvalue())
 
     def reader(self, sheet):
         return [[x.encode('utf-8') if isinstance(x, unicode) else
                 x for x in sheet.row_values(n)] for n in xrange(sheet.nrows)]
+    @property
+    def sheets(self):
+        return list(self.wb.sheets())
 
-    def preprocess(self):
-        self._nrows = sum(sheet.nrows for sheet in self.wb.sheets())
-        for sheet in self.wb.sheets():
-            if sheet.nrows >= 1:
+    @property
+    def sheetnames(self):
+        return [s.name for s in self.sheets]
+
+    def preprocess(self, **kwds):
+        super(Excel, self).preprocess()
+        self._sheets = {}
+        learnfields = kwds.pop('learnfields', False)
+
+        for sheet in self.sheets:
+            if sheet.nrows > 1:
                 rows = self.reader(sheet)
-                kwds = self.checkheader(rows[0:50], {'nrows' : sheet.nrows})
-                self(self._csvstring(rows), **kwds)  ##CULPRIT, skips columns, FIXED ??
+                testrows = rows[0:50]
+                _rules = mergedicts(self.checkheader(testrows), nrows = sheet.nrows, **self.kwds)
+
+                if learnfields:
+                    df = pd.read_csv(self._csvbuffer(testrows), **_rules)
+                    _rules['names'] = self.renamefields(df, _rules['names'], **kwds)
+
+                self._sheets.update({sheet.name :  _rules})
             elif sheet.nrows == 65536:
                 raise IncompleteExcelFile
+
+    @Tabular._iterdataframe
+    def dfreader(self, **kwds):
+        for name, rules in self._sheets.items():
+            yield pd.read_excel(self.path, sheetname = name, **rules)
 
 class Folder(OSPath):
     def __init__(self, path, pattern = '', recursive = False, files_only = False, setuplogging = True, **kwds):
@@ -438,8 +472,8 @@ class Folder(OSPath):
         self.search = lambda x, rgxpattern = rgx: rgxpattern.search(x)
         if self.search(path, rgxpattern = re.compile(r'(?:\.|^$)')):
             path = os.getcwd()
-        self.dupes = set()
-        self.dist = set()
+        self.duplicatefiles = set()
+        self.distinctfiles = set()
         self.recursive = recursive
         self.files_only = files_only
         super(Folder, self).__init__(path, setuplogging = setuplogging)
@@ -464,9 +498,17 @@ class Folder(OSPath):
             OSPath(path).properties for path in Folder.listdir(*args, **kwds)
                 ])
 
-    def deduplicate(self):
+    @classmethod
+    def get_distinctfiles(cls, dirname, **kwds):
+        extractdir = kwds.pop('extractdir', 'unzipped')
+        folder = cls(dirname, **kwds)
+        return [path for path in
+                folder._get_distinctfiles(extractdir = extractdir)
+                    ]
+
+    def _get_distinctfiles(self, **kwds):
         __ = defaultdict(list)
-        self.unzipfiles()
+        self.unzipfiles(self.path, recursive_unzip = True, **kwds)
         self.recursive = True
         self.files_only = True
         for fname in self:
@@ -474,10 +516,12 @@ class Folder(OSPath):
                 __[getmd5(fname)].append(fname)
         for k, v in __.items():
             if len(v) > 1:
-                self.info("Duplicate found: %s" % v[1])
-                self.dupes.add(v[1])
-            self.dist.add(v[0])
+                self.info("Duplicate file found: '{}'".format(v[1]))
+                self.duplicatefiles.add(v[1])
+            self.distinctfiles.add(v[0])
             yield v[0]
+        self.info("Total distinct files: {}.".format(len(self.distinctfiles)))
+        self.info("Total duplicate files: {}.".format(len(self.duplicatefiles)))
 
     def _walk(self):
         if not self.recursive:

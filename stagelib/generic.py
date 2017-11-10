@@ -10,6 +10,7 @@ from collections import MutableMapping
 from itertools import islice
 from functools import wraps, partial
 
+re_DOUBLESPACE = re.compile(r' {2,}')
 LOGDIR = os.path.join(os.path.dirname(__file__), 'logs')
 
 def removehandlers(logger):
@@ -34,6 +35,9 @@ def logging_setup(name = None, logger = None, logging_config = None, ch = None, 
 
     _formatter = logging.Formatter(fmtstring)
     if not fh:
+        if not os.path.exists(logdir):
+            os.mkdir(logdir)
+
         logfile = os.path.join(logdir, logger.name + '.log')
         fh = logging.handlers.RotatingFileHandler(logfile, encoding = 'utf-8')
         fh.setLevel(logging.DEBUG)
@@ -58,6 +62,16 @@ def mergedicts(*dictionaries, **kwds):
 
 def reversedict(dictionary):
     return {v : k for k, v in dictionary.items()}
+
+def filterdict(dictionary, values, inverse = False, pattern = None):
+    _filter = (lambda x: x == values[0] if
+               len(values) == 1 else x in values)
+    func = lambda x: _filter(x)
+    if pattern:
+        _filter = lambda x: re.search(pattern, x)
+    if inverse:
+        func = lambda x: not _filter(x)
+    return {k : v for k, v in dictionary.items() if func(k)}
 
 def dictupgrade(dictionary, func, *args, **kwds):
     return {k : func(v, *args, **kwds) for k, v in dictionary.items()}
@@ -143,10 +157,10 @@ def numeric(func):
 def strip(x, *args): return x.strip(" \t%s" % ''.join(args))
 
 @textstring
-def to_single_space(x): return re.compile(r'\s{2,}').sub(' ', x)
+def to_single_space(x): return re_DOUBLESPACE.sub(' ', x)
 
 @textstring
-def remove_non_ascii(x): return ''.join(i for i in x if ord(i)<128)
+def remove_non_ascii(x): return ''.join(i for i in x if ord(i) < 128)
 
 def fuzzyprep(x):
     """Remove whitespace, punctuation, and non-ascii characters

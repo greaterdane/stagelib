@@ -20,20 +20,7 @@ newfolder = partial(mkdir, get_homedir())
 LABELDIR = newfolder('config', 'addresslabels')
 ZIPCODEDIR = newfolder('data', 'zipcodes')
 
-def get_zipdata():
-    __ = pd.read_csv(mkpath(ZIPCODEDIR, 'zipcodes.zip'), dtype = 'object')
-    return __.assign(State = __['State']\
-            .fillna('State Abbreviation')\
-            .fillna('Place Name'))
-
-def get_zipcodes(df):
-    stategroups = get_zipdata().groupby('State.1')
-    for state, data in stategroups:
-        mask = (df.state == state) & (df.zip.isnull())
-        zipmap = idict(data.get_mapper('Place Name', 'Zip Code'))
-        df.loc[mask, 'zip'] = df.loc[mask, 'city'].map(lambda x: zipmap.get(x))
-    return df
-
+#phone
 def get_phoneorfax(x):
     number = re_GARBAGEPHONE.sub('', x)
     if re_PHONE.match(number) and not re_1800NUMBER.match(x):
@@ -47,6 +34,7 @@ def get_phoneorfax(x):
 def to_phone(x):
     return get_phoneorfax(x)
 
+#names
 def getname(name):
     h = HumanName(name); h.capitalize()
     return {'firstname' : "%s %s" % (h.first, h.middle),
@@ -55,12 +43,32 @@ def getname(name):
 def to_name(self):
     return pd.DataFrame([
         d for d in self.modify(
-            self.isnull(),
-            {'firstname' : np.nan, 'lastname' : np.nan},
+            self.notnull(),
             self.quickmap(getname)
                 )], index = self.index).clean()
 
-def clean_addresses(df):
+#address
+def get_zipdata():
+    __ = pd.read_csv(mkpath(ZIPCODEDIR, 'zipcodes.zip'), dtype = 'object')
+    return __.assign(State = __['State']\
+            .fillna('State Abbreviation')\
+            .fillna('Place Name'))
+
+def get_zipcodes(df):
+    if not hasattr(df, 'state'):
+        return df
+
+    stategroups = get_zipdata().groupby('State.1')
+    for state, data in stategroups:
+        mask = (df.state == state) & (df.zip.isnull())
+        zipmap = idict(data.get_mapper('Place Name', 'Zip Code'))
+        df.loc[mask, 'zip'] = df.loc[mask, 'city'].map(lambda x: zipmap.get(x))
+    return df
+
+def is_validaddress(df):
+    return (df['zip'].str.contains(r'^\d{5}(?:-\d{4})?$')) & (df.valid)
+
+def to_address(df):
     """
     Attempts to parse DataFrame addresses into individual components.
     DataFrame is expected to have one or more of the following fields:
@@ -75,32 +83,24 @@ def clean_addresses(df):
      ----------
      df : pd.DataFrame
     """
-    fields = sorted(df.filter_fields(items = USAddress.labels.keys()))
-    _parsed = df.joinfields(fields = fields)\
+    fields = sorted(USAddress.labels.keys()) + ['fulladdress']
+    fulladdresses = df.joinfields(fields = fields)
+    if fulladdresses.isnull().all():
+        return df
+
+    df['fulladdress'] = fulladdresses
+    _parsed = fulladdresses\
         .dropna()\
         .quickmap(USAddress.parse)\
         .to_dict()
 
-    addresses = get_zipcodes(
+    df[fields] = get_zipcodes(
         pd.DataFrame(_parsed.values(),
-            index = _parsed.keys()))
+            index = _parsed.keys())
+                ).loc[is_validaddress, fields
+                    ].reindex(df.index).ix[:, fields]
 
-    _addrdict = {k : (
-        _parsed[k]['fulladdress'] if isinstance(v, float)
-            else v) for k, v in addresses.fillna('')\
-                .joinfields(fields = fields)\
-                .to_dict().items()}
-
-    df['fulladdress'] = df\
-        .reset_index()['index']\
-        .map(_addrdict)
-
-    df[fields] = addresses.loc[
-        (addresses.valid) &\
-        (addresses.zip.notnull())]\
-            .ix[:, fields]\
-            .reindex(df.index)\
-            .combine_first(df[fields])
+    df['address1'] = df['address1'].combine_first(fulladdresses)
     return df
 
 class USAddress(object):
@@ -158,5 +158,4 @@ class USAddress(object):
 
 pd.Series.to_phone = to_phone
 pd.Series.to_name = to_name
-pd.DataFrame.clean_addresses = clean_addresses
-
+pd.DataFrame.to_address = to_address

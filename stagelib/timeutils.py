@@ -4,6 +4,7 @@ import logging
 from dateutil.relativedelta import relativedelta
 import pytz
 import pandas as pd
+from pandas.tslib import Timestamp
 
 from generic import mergedicts, attribute_generator, logging_setup
 #from fileIO import importpandas
@@ -17,7 +18,7 @@ re_EPOCH = re.compile(r'^\d{5}(?:\.0|$)')
 DATE_FORMAT_LIST = ["%m%d%Y"]
 
 def utcnow():
-    return pytz.utc.localize(datetime.datetime.now())
+    return Timestamp(pytz.utc.localize(datetime.datetime.now()))
 
 def n_months_ago(n):
     return datetime.datetime.today() - relativedelta(months = n)
@@ -70,7 +71,7 @@ class Date(object):
         raise BadDate(self.date)
 
     @classmethod
-    def parse(cls, date, fmt = False, disect = False, **kwds):
+    def parse(cls, date, fmt = False, disect = False, force = False, **kwds):
         _ = cls(date, **kwds)
         if fmt:
             try:
@@ -88,7 +89,6 @@ class Date(object):
             date = str(date)
         return True if re_EPOCH.search(date) else False
 
-    #@importpandas
     def to_datetime(self, date, dayfirst = False, **kwds):
         if not date:
             return

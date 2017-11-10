@@ -29,8 +29,8 @@ def learn_fields(df, fields_map, fields = [], table = '', path = '', strict = Tr
         return fields_map
 
     start = 0
-    end = 0
-    for field in df.columns:
+    end = 10
+    for i, field in enumerate(df.columns):
         if str(field) in fields_map:
             continue
         _ = '\n'.join(df[field].head(20)\
@@ -57,9 +57,8 @@ def learn_fields(df, fields_map, fields = [], table = '', path = '', strict = Tr
                 if choice2 == '1':
                     break
                 choice = choice2
-
-            start += 1
-            end += 1
+            start += i
+            end += i
             break
         fields_map.update({field : choice})
     return fields_map

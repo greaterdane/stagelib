@@ -1,12 +1,14 @@
 import os, gc
 import pandas as pd
 
-from generic import GenericBase, mergedicts
-from fileIO import OSPath, File, chunkwriter, from_json, to_json, mkpath, mkdir, get_readcsvargs
+from generic import GenericBase, mergedicts, filterdict
+from fileIO import (OSPath, File, Tabular,
+                    writedata, from_json, to_json,
+                    appendData, mkpath, mkdir, getcsvkwds)
 import dataframe
-from learner import learn_fields
+import record
 
-learnlogfmt = "'{field}' --> '{choice}'.".format
+arrowfmt = "'{}' --> '{}'.".format
 
 class SchemaNotRegistered(Exception):
     pass
@@ -14,65 +16,138 @@ class SchemaNotRegistered(Exception):
 class SchemaNotSpecified(Exception):
     pass
 
+# Safety net.!!
+class Itemcounter(object):
+    pass
+
+class SafetyCheck(object):
+    ##'checklist' will contain a list of dictionaries for each key (WARNING, ERROR).
+    ##Each dictionary will consist of the following fields.
+        ## 'name' : Name of warning or error.
+        ## 'desc' : Verbose description of warning or error.
+        ## 'func' : Function used to check the warning or error.  Can be defined in list or elsewhere.
+    ##We can let items in WARNING slide, items in ERROR will prevent data from going into the database or prodution environment.
+
+    checklist = {
+        "WARNING" : [], #Can have some but not all.
+        "ERROR" : [] #Cannot have any.
+            }
+
+    def __init__(self):
+        self.errors = defaultdict(pd.DataFrame)
+        self.table = pd.DataFrame()
+
+    def __add__(self, df_or_other):
+        if isinstance(df_or_other, type(self)):
+            df_or_other = df_or_other.table
+        __ = self.createtable(df_or_other)
+        if self.table.empty:
+            self.table = __
+        else:
+            self.table['count'] += __['count']
+        return self
+
+    @property
+    def errors(self):
+        return self.table.level == 'ERROR'
+
+    @property
+    def warnings(self):
+        return self.table.level == 'WARNING'
+
+    def setup(self, df):
+        __ = []
+        for level, items in self.checklist.items():
+            __.extend([mergedicts(item,
+                level = level,
+                mask = item['func']()) for item in items])
+        return __
+
+    def locate(self, mask, name, df):
+        __ = df.loc[mask].drop_blankfields()
+        if not __.empty:
+            self.errors[name] = self.errors[name].append(__)
+        return __
+
+    def createtable(self, item, df):
+            __ = self.locate(item['mask'], item['name'], df)
+            count = len(__)
+            return {
+                'description' : item['desc'],
+                'count' : count,
+                'level' : ("Ok!" if count < 1 else item['level'])
+                    }
+
 class Stage(GenericBase):
     CONFIGDIR = mkdir(OSPath.dirname(__file__), 'config')
     SCHEMADIR = mkdir(CONFIGDIR, 'schema')
-    FIELDSPATH = mkpath(CONFIGDIR, 'fieldsconfig.json')
+    FIELDSDIR = mkdir(CONFIGDIR, 'fieldsmap')
+    FIELDSPATH = mkpath(FIELDSDIR, 'fieldsconfig.json')
 
-    def __init__(self, schname, fieldspath = '', log_fieldlearner = False, **kwds):
-        self.name = schname
+    def __init__(self, schema_name, fieldspath = '', **kwds):
+        self.schema_name = schema_name
         self.fieldspath = self.FIELDSPATH
         if fieldspath:
             self.fieldspath = fieldspath
 
-        self.log_fieldlearner = log_fieldlearner
         self.load()
         super(Stage, self).__init__()
 
     @classmethod
-    def getschemapath(cls, name):
-        return mkpath(cls.SCHEMADIR, '{}.json'.format(name))
+    def findschema(cls, schema_name):
+        return mkpath(cls.SCHEMADIR, '{}.json'.format(schema_name))
 
     @classmethod
     def getconfig(cls, path):
         if not OSPath.exists(path):
-            raise SchemaNotRegistered, "'{}' not found.  Please register desired configuration.".format(path)
+            to_json(path, {})
         return from_json(path)
 
     @classmethod
     def registerschema(cls, name, fields = [], datetime_fields = [], text_fields = [], numeric_fields = [], converters = {}):
-        template = cls.getconfig(cls.getschemapath('template'))
+        template = cls.getconfig(cls.getschema_namepath('template'))
         template['fields'] = fields
         template['datetime_fields'] = datetime_fields
         template['text_fields'] = text_fields
         template['numeric_fields'] = numeric_fields
-        to_json(cls.getschemapath(name), template)
+        to_json(cls.getschema_namepath(name), template)
         print "'{}' registered".format(name)
 
     @classmethod
-    def get_schemaconfig(cls, name):
-        return cls.getconfig(cls.getschemapath(name))
+    def get_schemaconfig(cls, schema_name):
+        path = cls.findschema(schema_name)
+        if not OSPath.exists(path):
+            raise SchemaNotRegistered, "'{}' not found.  Please register desired configuration.".format(schema_name)
+        return cls.getconfig(path)
 
     @classmethod
-    def getfields(cls, name):
-        __ = cls.get_schemaconfig(name)
+    def getfields(cls, schema_name):
+        __ = cls.get_schemaconfig(schema_name)
         if 'fields' not in __:
-            raise SchemaNotRegistered, "{} is missing 'fields' attribute, please re-register or edit config path '{}'.".format(name, cls.getschemapath)
+            raise SchemaNotRegistered, "{} is missing 'fields' attribute, please re-register or edit config path '{}'.".format(schema_name, cls.findschema)
         return __['fields']
 
     @classmethod
-    def learnfields(cls, df, fieldspath = '', usedefault = False, name = '', **kwds):
-        if not fieldspath:
-            if usedefault:
-                fieldspath = cls.FIELDSPATH
-            if not name:
-                raise SchemaNotSpecified, "Either a 'fieldsmap' path or schema name needs to be specified."
-            else:
-                fieldspath = mkpath(cls.CONFIGDIR, "%s_fieldsmap.json".format(schema))
-                to_json({}, fieldspath)
+    def learnfields(cls, df, usedefault = False, **kwds):
+        schema_name = kwds.pop('table', '')
+        fieldspath = kwds.pop('fieldspath', '')
+        fieldsmap = kwds.pop('fieldsmap', {})
+        if not fieldsmap:
+            if not fieldspath:
+                if usedefault:
+                    fieldspath = cls.FIELDSPATH
+    
+                if not schema_name:
+                    raise SchemaNotSpecified, "Either a 'fieldsmap' path or schema_name name needs to be specified."
+                else:
+                    fieldspath = mkpath(cls.CONFIGDIR, "%s_fieldsmap.json".format(schema_name))
+                    if OSPath.notexists(fieldspath):
+                        to_json({}, fieldspath)
+            fieldsmap = cls.getconfig(fieldspath)
 
-        __ = cls.getconfig(fieldspath)
-        fieldsmap = learn_fields(df, __, **kwds)
+        fieldsmap = Tabular.learnfields(df, fieldsmap,
+            fieldspath = fieldspath, table = schema_name, **kwds)
+
         to_json(fieldspath, fieldsmap)
         return fieldsmap
 
@@ -92,40 +167,52 @@ class Stage(GenericBase):
                 ).ix[:, fields]
 
     @classmethod
-    def normalize(cls, df, schname, fieldspath = '', **kwds):
-        return cls(schname, fieldspath = fieldspath).normdf(df)
+    def processfile(cls, path, prsrkwds = {}, *args, **kwds):
+        return cls(*args, **kwds).parsefile(path, **prsrkwds)
 
     @classmethod
-    def normalizefile(cls, path, schname, fieldspath = '', **kwds):
-        return cls(schname, fieldspath = '').normfile(**kwds)
+    def processfiles(cls, dirname, lookfor = '', outdir = '', dataset = False, *args, **kwds):
+        pathnames = Folder.listdir(dirname,
+            pattern = lookfor,
+            files_only = True)
+
+        prsrkwds = getcsvkwds(kwds)
+        kwds = filterdict(kwds, inverse = True, *prsrkwds.keys())
+        if dataset:
+            properties = []
+            prsr = cls(*args, **kwds)
+            for path in pathnames:
+                properties.append(prsr.parsefile(path, outdir = outdir, **prsrkwds))
+        else:
+            for path in pathnames:
+                properties.append(cls.processfile(path, fieldspath, prsrkwds = prsrkwds, *args, **kwds))
+        return properties
 
     @property
     def fieldgroups(self):
         return {k : v for k, v in self.__dict__.items() if
-            isinstance(v, list) and k.endswith('_fields')}
+                isinstance(v, list) and k.endswith('_fields')}
+
+    @property
+    def learnerkwds(self):
+        return dict(fieldsmap = self.fieldsmap,
+            fieldspath = self.fieldspath,
+            table = self.schema_name,
+            fields = self.fields)
 
     def load(self, fieldspath = ''):
         if not fieldspath:
             fieldspath = self.fieldspath
 
         self.fieldsmap = self.getconfig(self.fieldspath)
-        __ = self.get_schemaconfig(self.name)
+        __ = self.get_schemaconfig(self.schema_name)
         for k, v in __.items():
+            if k == 'converters':
+                v = {k2 : eval(v2) for k2, v2 in v.items()}
             setattr(self, k, v)
 
-    def _learnfields(self, df, **kwds):
-        __ = self.learnfields(df,
-            table = self.name,
-            fieldspath = self.fieldspath, **kwds)
-
-        if self.log_fieldlearner:
-            self.fieldsmap.update(__)
-            for k, v in self.fieldsmap.items():
-                if k in df.columns:
-                    self.info(learnlogfmt(field = k, choice = v))
-
     def _conform(self, df, **kwds):
-        return self.conform(df, self.name,
+        return self.conform(df, self.schema_name,
             fieldsmap = self.fieldsmap,
             fields = self.fields, **kwds)
 
@@ -135,46 +222,71 @@ class Stage(GenericBase):
             return None
         return getattr(pd.Series, "to_{}".format(name.split('_')[0]))
 
-    def normdf(self, df, omit = '', omitdefault = True, **kwds):
-        _defaultchars = ('\\', '=')
-        if not omitdefault:
-            _defaultchars = tuple()
+    def patchmissing(self, df, exclude = []):
+        return df.patchmissing(exclude = exclude)
 
-        to_omit = [omit] + list(_defaultchars)
-        self._learnfields(df, path = kwds.pop('path', ''))
-        df = df.rename(columns = self.fieldsmap).clean(*to_omit)
-        self.info("The following characters have been omitted: '{}'.".format(''.join(to_omit)))
+    def to_string(self, df, **kwds):
+        tries = 0
+        while True:
+            try:
+                return df.to_csv(index = False, header = False, **kwds)
+            except UnicodeEncodeError as e:
+                tries += 1; kwds.update(encoding = 'utf-8')
+            if tries == 2:
+                break
+
+    def parse(self, df, to_strip = '', strip_default = True, learnfields = True, **kwds):
+        if learnfields:
+            self.learnfields(df, path = kwds.pop('path', ''), **self.learnerkwds)
+            df = df.rename(columns = self.fieldsmap)
+
+        defaultchars = ('\\', '=')
+        if not strip_default:
+            defaultchars = tuple()
+
+        to_strip = [to_strip] + list(defaultchars)
+        df = self.patchmissing(df.clean(*to_strip), exclude = kwds.pop('exclude', [])) #LOG LOG LOG!!!!!!
+        self.info("The following characters have been stripped (if present): '{}'.".format(''.join(to_strip)))
 
         for name, fields in self.fieldgroups.items():
             if fields:
-                flds = df.filter_fields(items = fields)
+                flds = df.filterfields(items = fields)
                 func = self._getfunc(name)
+                if name == 'address_fields':
+                    self.info("Data contains address information.  I will attempt to extract street, city, state, and zip.")
+                    df = df.to_address()
                 if not func:
                     continue
 
                 self.info("Applying function '{}' to fields '{}'".format(func.func_name, ', '.join(map(str, flds))))
                 df[flds] = df[flds].apply(func)
-        gc.collect()
+
         return self._conform(df)
 
-    def normfile(self, path, outfile = '', outdir = 'normalized', **kwds):
-        csvkwds = {k : v for k, v in kwds.items() if k in get_readcsvargs()}
-        tfile = File.guess(path, **csvkwds)
-        normalized = 0
+    def parsefile(self, path, outfile = '', outdir = 'processed', learnfields = True, **kwds):
+        if 'converters' not in kwds:
+            kwds.update(converters = self.converters)
+
+        _kwds = getcsvkwds(kwds)
+        _file = File.guess(path, **_kwds)
         if not outfile:
-            _ = OSPath(tfile.basename()).stem
+            _ = OSPath(_file.basename()).stem
             outfile = "{}_output.csv".format(_)
 
-        outfile = mkpath(mkdir(outdir), outfile)
-        for df in tfile.dfreader():
-            header = True
-            if tfile.chunkidx > 1:
-                header = False
-            df = self.normdf(df, path = path, **kwds)
-            normalized += len(df)
-            chunkwriter(outfile,
-                df.to_csv(index = False))
+        mkdir(outdir); outfile = mkpath(outdir, outfile)
+        normalized = 0
+        _learnfields = False
+        if not learnfields:
+            _learnfields = True
+            kwds['path'] = path
 
+        __ = _file.dfreader(learnfields = learnfields, **self.learnerkwds)
+        writedata(outfile, "{}\n".format(','.join(self.fields)))
+        for df in __:
+            df = self.parse(df, learnfields = _learnfields,
+                **filterdict(kwds, *_kwds.keys()))
+            normalized += len(df)
+            appendData(outfile, self.to_string(df))
         self.info("Normalized data written to '{}'".format(outfile))
-        return mergedicts(tfile.properties,
+        return mergedicts(_file.properties,
             rows_normalized = normalized)

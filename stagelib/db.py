@@ -1,4 +1,6 @@
-import logging
+import os, sys, logging
+from warnings import filterwarnings
+import MySQLdb
 from functools import wraps
 import pandas as pd
 from peewee import *
@@ -6,7 +8,9 @@ from playhouse.shortcuts import RetryOperationalError
 
 from generic import reversedict, logging_setup, chunker
 from fileIO import from_json
+import dataframe
 
+filterwarnings('ignore', category = MySQLdb.Warning)
 db_logger = logging_setup(name = 'db', level = logging.INFO)
 #peewee_logger = logging_setup(name = 'peewee', level = logging.INFO)
 
@@ -20,6 +24,15 @@ def getdb(dbname, flavor = 'mysql', path = 'login.json', hostalias = 'localhost'
 
 def dbclasses():
     return {'mysql' : CustomMySQLDatabase, 'sqllite' : SqliteDatabase}
+
+def to_records(query):
+    return list(query.dicts().execute())
+
+def to_dataframe(query, cleanup = False):
+    df = pd.DataFrame(to_records(query))
+    if cleanup:
+        return df.clean()
+    return df
 
 def connected(func):
     def inner(database, *args, **kwds):
@@ -35,7 +48,7 @@ def connected(func):
 def _dataframe(func):
     @wraps(func)
     def inner(cls, *args, **kwds):
-        return cls.to_dataframe(func(*args, **kwds))
+        return to_dataframe(func(*args, **kwds))
     return inner
 
 def _insertdecorator(func):
@@ -95,14 +108,6 @@ def get_basemodel(database):
             if bulk:
                 return cls.bulkinsert(rows, **kwds)
             return cls.tryinsert(rows, **kwds)
-
-        @classmethod
-        def to_records(cls, query):
-            return list(query.dicts().execute())
-        
-        @classmethod
-        def to_dataframe(cls, query):
-            return pd.DataFrame(cls.to_records(query))
 
         @classmethod
         def getdict(cls, field, reversed = False):
