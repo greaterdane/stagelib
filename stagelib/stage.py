@@ -367,9 +367,9 @@ class Stage(GenericBase):
 
         __ = _file.properties
         __.udpate(rows_normalized = self.normalized)
-        reportederrors = sum(self.errors)
+        errors = sum(self.errors)
         return mergedicts(self.report,
             fileproperties = __,
             rowsdropped = self.rowsdropped,
-            reportederrors = reportederrors,
-            valid = reportederrors.danger)
+            errors = errors,
+            valid = errors.danger)

@@ -13,8 +13,7 @@ from timeutils import utcnow
 from learner import learn_fields
 
 pd = None
-re_NONFIELD = re.compile('^(?:\s+)?(?:(?:\$)?\d+(?:[-\/\.\s,]+|$)|[%s]|[\|,\t]+(?:\s+)?|$)' % punctuation)
-PATHFUNCS = dir(os.path)
+re_NONFIELD = re.compile('^(?:\s+)?(?:(?:\$)?\d+(?:[-\/\.\s,]+|$)|[%s]|[\|,\t]+(?:\s+)?)' % punctuation)
 
 def importpandas(func):
     @wraps(func)
@@ -342,7 +341,7 @@ class Csv(Tabular):
     DELIMITERS = '|,\t;:'
     re_BADTAIL = re.compile(r'(^.*?"),"\n', re.M)
 
-    def __init__(self, path, mode = "U", chunksize = 79650, **kwds):
+    def __init__(self, path, mode = "U", chunksize = 185000, **kwds):
         super(Csv, self).__init__(path, mode = mode, chunksize = chunksize, **kwds)
         self.fixcsv = '","\n' in self.testraw
         self.delimiter = self.sniff(self.testraw)
