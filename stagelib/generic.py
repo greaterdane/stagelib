@@ -63,14 +63,14 @@ def mergedicts(*dictionaries, **kwds):
 def reversedict(dictionary):
     return {v : k for k, v in dictionary.items()}
 
-def filterdict(dictionary, values, inverse = False, pattern = None):
-    _filter = (lambda x: x == values[0] if
-               len(values) == 1 else x in values)
+def filterdict(dictionary, list_or_pattern, inverse = False, flags = re.I):
+    _filter = (lambda x: re.search(list_or_pattern, x, flags) if
+               len(list_or_pattern) == 1 else x in list_or_pattern)
+
     func = lambda x: _filter(x)
-    if pattern:
-        _filter = lambda x: re.search(pattern, x)
     if inverse:
         func = lambda x: not _filter(x)
+
     return {k : v for k, v in dictionary.items() if func(k)}
 
 def dictupgrade(dictionary, func, *args, **kwds):
@@ -186,6 +186,25 @@ def integer(x, **kwds):
 def floating_point(x, **kwds):
     return float(x)
 
+def search(pattern, x, **kwds):
+    if isinstance(pattern, (str, unicode)):
+        pattern = re.compile(pattern, **kwds)
+    return pattern.search(x)
+
+def getsearch(pattern, x, n = 1, asdict = False, **kwds):
+    __ = search(pattern, x, **kwds)
+    if __:
+        if asdict:
+            return __.groupdict()
+        elif not n:
+            return __.groups()
+        return __.group(n)
+    return
+
+isearch = partial(search, flags = re.I)
+getdict = partial(getsearch, asdict = True)
+getgroups = partial(getsearch, n = None)
+
 class idict(MutableMapping):
     """A case-insensitive dict-like object.
     Taken from "https://github.com/requests/requests-docs-it/blob/master/requests/structures.py"
@@ -257,6 +276,7 @@ class EasyInit(object):
                 extra = {k : v for k, v in slf.__dict__.items() if v in args}
                 self.add_logging_methods(slf, extra = extra)
             __ = mergedicts(kwds, self.kwds, self._kwds)
+
             for k, v in __.items():
                 if '_logging' not in k:
                     setattr(slf, k, v)
@@ -272,3 +292,19 @@ class Test(GenericBase):
     def __init__(self, path, setuplogging = False, *args, **kwds):
         self.path = path
         super(Test, self).__init__(path, setuplogging = setuplogging, *args, **kwds)
+        
+class RedirectStdStreams(object):
+    def __init__(self, stdout=None, stderr=None):
+        self._stdout = stdout or sys.stdout
+        self._stderr = stderr or sys.stderr
+
+    def __enter__(self):
+        self.old_stdout, self.old_stderr = sys.stdout, sys.stderr
+        self.old_stdout.flush(); self.old_stderr.flush()
+        sys.stdout, sys.stderr = self._stdout, self._stderr
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._stdout.flush(); self._stderr.flush()
+        sys.stdout = self.old_stdout
+        sys.stderr = self.old_stderr
+

@@ -10,8 +10,8 @@ from generic import mergedicts, attribute_generator, logging_setup
 #from fileIO import importpandas
 
 #pd = None
-logger = logging.getLogger(__name__)
-logging_setup(logger = logger)
+date_logger = logging.getLogger(__name__)
+logging_setup(logger = date_logger)
 re_DATE = re.compile(r'.*?(2\d{3})(?:[-\.\/])?(\d{2})(?:[-\.\/])?(\d{2}).*')
 re_EPOCH = re.compile(r'^\d{5}(?:\.0|$)')
 
@@ -37,7 +37,7 @@ def is_dayfirst(date):
             month = _[1]
         except IndexError:
             return False
-    #logger.info("'%s' / MONTH - '%s'" % (date, month))
+    #date_logger.info("'%s' / MONTH - '%s'" % (date, month))
     try:
         if int(month) > 12:
             return True
@@ -50,7 +50,7 @@ def try_date_formats(date):
         try:
             return datetime.datetime.strptime(date, _)
         except ValueError as e:
-            logger.error(e)
+            pass #; date_logger.error(e)
 
 class BadDate(Exception):
     pass
@@ -77,7 +77,10 @@ class Date(object):
             try:
                 return str(_)
             except BadDate as e:
-                logger.error(e)
+                #date_logger.error(e)
+                if force:
+                    date_logger.warning("Value '{}' truncated.".format(date))
+                    return
         elif disect:
             return _.disect()
         else:

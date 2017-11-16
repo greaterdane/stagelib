@@ -61,7 +61,10 @@ def quickmapper(func):
 def checknumeric(func):
     @wraps(func)
     def inner(self, *args, **kwds):
-        if self.dtype == 'O':
+        self = self.to_numeric(
+            force = kwds.pop('force', True),
+            integer = kwds.pop('integer', False))
+        if self.dtype == 'O': #if for some reason values did not get converted properly
             raise IsNotNumeric("Values must be converted to a numeric data type (float, int) to ensure accurate comparisons.")
         return func(self, *args, **kwds)
     return inner
@@ -107,11 +110,11 @@ def series_functions():
 
     @checknumeric
     def gtzero(self):
-        return self.to_numeric() > 0
+        return self > 0
 
     @checknumeric
     def ltzero(self):
-        return self.to_numeric() < 0
+        return self < 0
 
     #modifiers
     _int = quickmapper(integer)
@@ -141,7 +144,7 @@ def series_functions():
         self.loc[self.contains(re_PUNCTBLANK_ONLY)] = np.nan
         return self
 
-    def to_numeric(self, integer =  False, **kwds):
+    def to_numeric(self, integer =  False, force = False, **kwds):
         """Convert values in self to a numeric data type.
 
         Parameters:
@@ -149,20 +152,31 @@ def series_functions():
         self : SubclassedSeries.
         [integer] : Flag specifying to convert as type int. bool
         """
+        kwds = mergedicts(force = force, **kwds)
         if integer:
-            return self.astype(str)._int(**kwds).fillna(0)
+            return self.fillna('').astype(str)._int(**kwds)
         return self._float(**kwds)
 
-    def to_datetime(self, fmt = False, disect = False, *args, **kwds):
+    def isnull(self):
+        return (super(pd.Series, self).isnull()) | (self.astype(str) == '')
+
+    def notnull(self):
+        return (super(pd.Series, self).notnull()) & (self.astype(str) != '')
+
+    def unique(self):
+        return super(pd.Series, self.loc[self.notnull()]).unique()
+
+    def to_datetime(self, fmt = False, disect = False, force = False, *args, **kwds):
         _ = self.quickmap(is_dayfirst).any()
         return self.quickmap(Date.parse,
             fmt = fmt,
+            force = force,
             disect = disect,
             *args,
             **mergedicts(kwds, {'dayfirst' : _}))
 
     def disectdate(self, fields = [], **kwds):
-        return pd.DataFrame(self.to_datetime(disect = True, **kwds).tolist())
+        return pd.DataFrame(self.to_datetime(disect = True, fields = fields, **kwds).tolist())
 
     def modify(self, mask, ifvalue, elsevalue = None):
         """
@@ -190,7 +204,6 @@ def series_functions():
         setattr(pd.Series, k, v)
 
 def dataframe_functions():
-
     def rows_containing(self, pattern, fields = [], **kwds):
         if not fields:
             fields = self.columns
@@ -282,28 +295,34 @@ def dataframe_functions():
     def clean(self, *args): ##ONLY for use on entire dataframe
         return self.manglecols()\
             .apply(pd.Series.clean, args = args)\
-            .drop_blankfields()\
-            .dropna(how = 'all')\
-            .cleanfields()
+            .drop_blankfields()
+            
+    def lackingdata(df, thresh = None):
+        idx = df.dropna(how = 'all', thresh = thresh).index
+        return ~(df.index.isin(idx))
 
-    def get_mapper(self, keyfield, valuefield):
+    def get_mapper(self, keys, values, where = None):
 
-        """Create a dictionary with the values from keyfield
-        as keys / valuefield as values.
+        """Create a dictionary with the values from field 'keys'
+        as dict keys / values from field 'values' as values.
 
         Parameters:
         -----------
-        self : SubclassedDataFrame
-        keyfield : Series name for dict keys.
-        valuefield : Series name for dict values.
+        self : pd.DataFrame
+        keys : Field name to use for dict keys.
+        values : Field name to use for dict values.
         """
-        if not valuefield in self.columns or self.empty:
-            return {}
+        try:
+            mask = self[values].notnull()
+            if where is not None:
+                mask = mask & where
 
-        __ = self[valuefield].unique()
-        if any(__):
-            return self.loc[self[valuefield].isin(__)].dropna(
-                subset = [valuefield]).set_index(keyfield)[valuefield].to_dict()
+            if mask.any():
+                __ = self.loc[mask].set_index(keys)
+                return __[values].to_dict()
+            return {}
+        except KeyError:
+            return {}
 
     def prettify(self, headers = 'keys', **kwds):
         """

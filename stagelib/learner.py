@@ -23,15 +23,17 @@ _char = '='
 border = _char * 13
 
 #learnfields
-def learn_fields(df, fields_map, fields = [], table = '', path = '', strict = True):
-    field_updates = {}
-    if all(i in fields for i in df.columns):
-        return fields_map
+def learn_fields(df, fieldsmap, fields = [], table = '', path = '', strict = True):
+    if set(fields).issuperset(df.columns):
+        return fieldsmap
 
     start = 0
-    end = 10
+    end = len(df.columns)
+    if end >= 60:
+        end = 10
+
     for i, field in enumerate(df.columns):
-        if str(field) in fields_map:
+        if str(field) in fieldsmap:
             continue
         _ = '\n'.join(df[field].head(20)\
             .fillna('N/A')\
@@ -44,7 +46,9 @@ def learn_fields(df, fields_map, fields = [], table = '', path = '', strict = Tr
                     table = table,
                     fields =  '\n'.join(map(str, df.columns[start:end])))
 
-        choice = raw_input(template.format(**params)); print
+        choice = raw_input(template.format(**params))
+        print
+
         while True:
             if not choice:
                 choice = field
@@ -60,5 +64,6 @@ def learn_fields(df, fields_map, fields = [], table = '', path = '', strict = Tr
             start += i
             end += i
             break
-        fields_map.update({field : choice})
-    return fields_map
+
+        fieldsmap.update({field : choice})
+    return fieldsmap
