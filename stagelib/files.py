@@ -393,15 +393,14 @@ class Csv(Tabular):
             __ = getdict(re_ERROR, error)
             if not __:
                 continue
-            yield mergedicts(__, index = __['line'] - 1)
+            yield __
 
     @staticmethod
     @importpandas
-    def getbadlines(path, **kwds):
+    def locate_badlines(path, **kwds):
         buf = StringIO()
-        kwds['header'] = None
-        if 'names' in kwds:
-            kwds.pop('header')
+        if not 'names' in kwds:
+            kwds['header'] = None
 
         with RedirectStdStreams(stdout = buf, stderr = buf):
             dfreader = pd.read_csv(path,
@@ -413,6 +412,11 @@ class Csv(Tabular):
 
         _ = buf.getvalue()
         return list(Csv.errorparse(_))
+
+    @staticmethod
+    @filehandler(mode = 'r')
+    def get_badlines(fh, rownumbers):
+        return [row for idx, row in enumerate(csv.reader(fh)) if idx in rownumbers]
 
     @property
     def testraw(self):

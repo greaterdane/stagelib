@@ -265,7 +265,7 @@ class Stage(GenericBase):
                 File.append(outfile, self.to_string(df))
             except CParserError:
                 self.warning("Found rows with embedded delimiters in '%s'. Attemping to locate culprits." % self.filename)
-                self.report['badlines'] = Csv.getbadlines(self.fobj.path, delimiter = self.fobj.delimiter)
+                self.report['badlines'] = Csv.locate_badlines(self.fobj.path, delimiter = self.fobj.delimiter)
             except IncompleteExcelFile as e:
                 self.warning(e.message)
                 self.report['incomplete_excel'] = self.filename
