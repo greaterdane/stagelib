@@ -238,7 +238,7 @@ class Stage(GenericBase):
         #reportfile = "{}_{}".format(ospath.basename(self.fobj.stem), reportfile) ##this may go soon
         #self.errorcatch.save(reportfile, counts = self.counts)  ##save report
 
-    def processfile(self, path_or_fobj, outfile = '', outdir = 'processed', learn = True, save_output = True, *args, **kwds): #fobj being an object of type files.File (Csv, Excel, etc.)
+    def processfile(self, path_or_fobj, outfile = '', outdir = 'processed', learn = True, *args, **kwds): #fobj being an object of type files.File (Csv, Excel, etc.)
         if isinstance(path_or_fobj, (str, basestring)):
             if 'converters' not in kwds:
                 kwds.update(converters = self.converters)
@@ -262,14 +262,11 @@ class Stage(GenericBase):
             try:
                 df = self.process(df, *args, **kwds)
                 self.normalized += len(df)
-                yield df
+                File.append(outfile, self.to_string(df))
             except CParserError:
                 self.warning("Found rows with embedded delimiters in '%s'. Attemping to locate culprits." % self.filename)
                 self.report['badlines'] = Csv.getbadlines(self.fobj.path, delimiter = self.fobj.delimiter)
             except IncompleteExcelFile as e:
                 self.warning(e.message)
                 self.report['incomplete_excel'] = self.filename
-
-            if save_output:
-                File.append(outfile, self.to_string(df))
         self.evaluate()
