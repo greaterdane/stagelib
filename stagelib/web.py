@@ -1,5 +1,4 @@
-import os
-import re
+import os, re
 from time import sleep
 from random import randint
 from collections import defaultdict
@@ -10,7 +9,7 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from generic import remove_non_ascii
-from fileIO import OSPath, isearch
+from files import ospath, isearch
 
 USER_AGENT = r"Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36"
 ACCEPT = r"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
@@ -106,7 +105,7 @@ class HomeBrowser(mechanize.Browser, object):
         if not outfile:
             outfile = url
 
-        if not OSPath.exists(outfile):
+        if not ospath.exists(outfile):
             self.retrieve(url, outfile)[0]
 
     def checkurl(self, pattern, url):
@@ -119,7 +118,7 @@ class HomeBrowser(mechanize.Browser, object):
         return "%s%s" % (self.starturl, url)
 
     def filterlinks(self, pattern):
-        return (x for x in self.links() if re.search(pattern, x.url))
+        return (x for x in self.links() if re.search(pattern, x.url, re.I))
 
     def browse(self, *args, **kwds):
         raise NotImplementedError
