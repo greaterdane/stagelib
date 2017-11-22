@@ -14,7 +14,7 @@ from learner import learn_fields
 
 pd = None
 re_NONFIELD = re.compile('^(?:\s+)?(?:(?:\$)?\d+(?:[-\/\.\s,]+|$)|[%s]|[\|,\t]+(?:\s+)?)' % punctuation)
-re_ERROR = re.compile(r'^Skipping line (?P<line>\d+): expected (?P<expected>\d+) fields, saw (?P<numfields>\d+)$')
+re_ERROR = re.compile(r'^Skipping line (?P<line>\d+): expected (?P<expected_length>\d+) fields, saw (?P<length>\d+)$')
 logger = logging_setup(name = __name__)
 
 def importpandas(func):
@@ -393,7 +393,7 @@ class Csv(Tabular):
             __ = getdict(re_ERROR, error)
             if not __:
                 continue
-            yield __
+            yield mergedicts(__, index = __['line'] - 1)
 
     @staticmethod
     @importpandas
@@ -406,14 +406,13 @@ class Csv(Tabular):
         with RedirectStdStreams(stdout = buf, stderr = buf):
             dfreader = pd.read_csv(path,
                 error_bad_lines = False,
-                chunksize = 300000, **kwds)
+                chunksize = 185000, **kwds)
 
             for df in dfreader:
                 continue
 
         _ = buf.getvalue()
-        return [mergedicts(row, filename = path) for
-                row in Csv.errorparse(_)]
+        return list(Csv.errorparse(_))
 
     @property
     def testraw(self):
