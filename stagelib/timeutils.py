@@ -7,15 +7,15 @@ import pandas as pd
 from pandas.tslib import Timestamp
 
 from generic import mergedicts, attribute_generator, logging_setup
-#from fileIO import importpandas
+#from files import importpandas
 
 #pd = None
 date_logger = logging.getLogger(__name__)
 logging_setup(logger = date_logger)
 re_DATE = re.compile(r'.*?(2\d{3})(?:[-\.\/])?(\d{2})(?:[-\.\/])?(\d{2}).*')
-re_EPOCH = re.compile(r'^\d{5}(?:\.0|$)')
+re_EPOCH = re.compile(r'^\d{5}(?:\.0)?$')
 
-DATE_FORMAT_LIST = ["%m%d%Y"]
+DATE_FORMAT_LIST = ["%m%d%Y", "%Y%m%d"]
 
 def utcnow():
     return Timestamp(pytz.utc.localize(datetime.datetime.now()))
@@ -24,7 +24,7 @@ def n_months_ago(n):
     return datetime.datetime.today() - relativedelta(months = n)
 
 def epoch_to_datetime(epoch):
-    return datetime.date(1900,1,1) + datetime.timedelta(float(epoch) - 2)
+    return Timestamp(datetime.date(1900,1,1) + datetime.timedelta(float(epoch) - 2))
 
 def is_dayfirst(date):
     """
@@ -37,7 +37,6 @@ def is_dayfirst(date):
             month = _[1]
         except IndexError:
             return False
-    #date_logger.info("'%s' / MONTH - '%s'" % (date, month))
     try:
         if int(month) > 12:
             return True
@@ -60,7 +59,7 @@ class Date(object):
 
     def __init__(self, date, strfmt = '%Y-%m-%d', **kwds):
         self.strfmt = strfmt
-        self.date = self.to_datetime(date, **kwds)
+        self.date = self.to_datetime(str(date), **kwds)
 
     def __repr__(self):
         return str(self.date)
@@ -77,7 +76,6 @@ class Date(object):
             try:
                 return str(_)
             except BadDate as e:
-                #date_logger.error(e)
                 if force:
                     date_logger.warning("Value '{}' truncated.".format(date))
                     return
@@ -88,23 +86,25 @@ class Date(object):
 
     @staticmethod
     def is_epoch(date):
-        if not isinstance(date, str):
-            date = str(date)
         return True if re_EPOCH.search(date) else False
 
     def to_datetime(self, date, dayfirst = False, **kwds):
-        if not date:
+        if not isinstance(date, str):
+            date = str(date)
+        elif not date:
             return
+
         if Date.is_epoch(date):
             date = epoch_to_datetime(date)
         try:
-            return pd.to_datetime(date, dayfirst = dayfirst, **kwds)
+            date = pd.to_datetime(date, dayfirst = dayfirst, **kwds)
         except ValueError as e:
-            return pd.to_datetime(try_date_formats(date))
+            date = pd.to_datetime(try_date_formats(date))
+        return date
 
     def disect(self):
         __ = map(lambda x: (x[0].split('_')[1], x[1]),
             attribute_generator(self.date.timetuple()))
         return mergedicts({
-            self.FIELDMAP.get(k, k) : v for (k, v) in __
-                }, quarter = self.date.quarter)
+            self.FIELDMAP.get(k, k) : v for (k, v) in __},
+                quarter = self.date.quarter)

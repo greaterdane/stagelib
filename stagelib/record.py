@@ -8,7 +8,7 @@ import usaddress
 from nameparser import HumanName
 
 from generic import strip, to_single_space, remove_non_ascii, idict
-from fileIO import OSPath, from_json, mkpath, mkdir, get_homedir
+from files import ospath, readjson, joinpath, newfolder, get_homedir
 import dataframe
 from dataframe import quickmapper
 
@@ -16,7 +16,7 @@ re_GARBAGEPHONE = re.compile(r'[\.\-\(\)\s]+')
 re_PHONE = re.compile(r'^\d+$')
 re_1800NUMBER = re.compile(r'^1-8\d{2}-')
 
-newfolder = partial(mkdir, get_homedir())
+newfolder = partial(newfolder, get_homedir())
 LABELDIR = newfolder('config', 'addresslabels')
 ZIPCODEDIR = newfolder('data', 'zipcodes')
 
@@ -49,7 +49,7 @@ def to_name(self):
 
 #address
 def get_zipdata():
-    __ = pd.read_csv(mkpath(ZIPCODEDIR, 'zipcodes.zip'), dtype = 'object')
+    __ = pd.read_csv(joinpath(ZIPCODEDIR, 'zipcodes.zip'), dtype = 'object')
     return __.assign(State = __['State']\
             .fillna('State Abbreviation')\
             .fillna('Place Name'))
@@ -65,7 +65,7 @@ def get_zipcodes(df):
         df.loc[mask, 'zip'] = df.loc[mask, 'city'].map(lambda x: zipmap.get(x))
     return df
 
-def is_validaddress(df):
+def is_valid_us_address(df):
     return (df['zip'].str.contains(r'^\d{5}(?:-\d{4})?$')) & (df.valid)
 
 def to_address(df):
@@ -97,14 +97,14 @@ def to_address(df):
     df[fields] = get_zipcodes(
         pd.DataFrame(_parsed.values(),
             index = _parsed.keys())
-                ).loc[is_validaddress, fields
+                ).loc[is_valid_us_address, fields
                     ].reindex(df.index).ix[:, fields]
 
     df['address1'] = df['address1'].combine_first(fulladdresses)
     return df
 
 class USAddress(object):
-    cnfg = from_json(mkpath(LABELDIR, 'addresslabels.json'))
+    cnfg = readjson(joinpath(LABELDIR, 'addresslabels.json'))
     labels = {k:([v] if not isinstance(v,list) else v)
               for k,v in cnfg['labels'].items()}
 

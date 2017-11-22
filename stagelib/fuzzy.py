@@ -6,7 +6,7 @@ import pandas as pd
 from fuzzywuzzy import fuzz
 
 from stagelib.generic import fuzzyprep, mergedicts
-from stagelib.fileIO import df2excel, mkdir, mkpath
+from stagelib.files import df2excel, newfolder, joinpath
 import stagelib.dataframe
 from stagelib.dataframe import quickmapper
 
@@ -184,7 +184,7 @@ def fuzzymatch(x_df, y_df, match_col, outfile_prefix = '', intern_folder = 'chec
         logger.error("No certain matches found.", exec_info = True)
         matches = pd.DataFrame()
 
-    internfile = mkpath(mkdir(intern_folder),
+    internfile = joinpath(newfolder(intern_folder),
         "%s_Possible Matches.xlsx" % outfile_prefix)
 
     pm = match_groups.get_group('POSSIBLE_MATCH')

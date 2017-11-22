@@ -1,7 +1,5 @@
-from __future__ import division
-
-import os, re
-import string
+import os, sys, re
+from string import ascii_letters, punctuation
 from datetime import datetime
 import logging
 import logging.handlers
@@ -36,7 +34,7 @@ def logging_setup(name = None, logger = None, logging_config = None, ch = None, 
     _formatter = logging.Formatter(fmtstring)
     if not fh:
         if not os.path.exists(logdir):
-            os.mkdir(logdir)
+            os.newfolder(logdir)
 
         logfile = os.path.join(logdir, logger.name + '.log')
         fh = logging.handlers.RotatingFileHandler(logfile, encoding = 'utf-8')
@@ -134,8 +132,9 @@ def textstring(func):
 def numberclean(x):
     if isinstance(x, unicode):
         x = str(x)
-    return x.translate(None, r'$=(),%*')\
-        .rstrip("-%s" % string.ascii_letters)
+
+    return x.translate(None, r'$=(),%*'
+        ).rstrip("-%s" % ascii_letters)
 
 def numeric(func):
     @wraps(func)
@@ -175,8 +174,7 @@ def fuzzyprep(x):
     if not isinstance(x, str):
         x = str(x)
 
-    return ''.join(re.split(r'\s+', x\
-        .translate(None, string.punctuation).lower()))
+    return ''.join(re.split(r'\s+', x.translate(None, punctuation).lower()))
 
 @numeric
 def integer(x, **kwds):
@@ -256,9 +254,9 @@ class EasyInit(object):
 
     @staticmethod
     def add_logging_methods(obj, logger = None, extra = {}, **kwds):
-        if not logger:
+        if not logger or not hasattr(self, '_logger'):
             obj._logger = logging.getLogger(EasyInit.get_logger_name(obj))
-        else:
+        elif logger:
             obj._logger = logger
 
         removehandlers(obj._logger)
@@ -272,21 +270,20 @@ class EasyInit(object):
         def inner(slf, *args, **kwds):
             setuplogging = kwds.pop('setuplogging', True)
             func(slf, *args, **kwds)
+
+            __ = mergedicts(kwds, self.kwds, self._kwds)
+            for k, v in __.items():
+                setattr(slf, k, v)
+
             if setuplogging:
                 extra = {k : v for k, v in slf.__dict__.items() if v in args}
                 self.add_logging_methods(slf, extra = extra)
-            __ = mergedicts(kwds, self.kwds, self._kwds)
-
-            for k, v in __.items():
-                if '_logging' not in k:
-                    setattr(slf, k, v)
         return inner
 
 class GenericBase(object):
     @EasyInit()
     def __init__(self, setuplogging = True, *args, **kwds):
-        if hasattr(self, '_logger'):
-            self._logger.handlers = []
+        pass
 
 class Test(GenericBase):
     def __init__(self, path, setuplogging = False, *args, **kwds):

@@ -1,5 +1,4 @@
 import re
-from string import ascii_letters, punctuation
 from collections import defaultdict
 from functools import wraps
 import pandas as pd
@@ -11,12 +10,13 @@ from generic import mergedicts, strip, to_single_space, remove_non_ascii, fuzzyp
 from timeutils import Date, is_dayfirst
 
 pd.set_option('display.max_colwidth', -1)
+pd.options.mode.chained_assignment = None
 
 def testdf():
     return pd.DataFrame({
         'vals':[1,2,3,4,5, '$5.00'],
         '10':["HELLO my Name is ____",2,3,4,5, '$15.00'],
-        'col1':['a','','c','','','!!!!!!!!!!!!!!!!!!!!!!'],
+        'col1':['a','               ','c','','','|||||||||||||'],
         'col1.1':['','','','d','d',''],
         'col1.2':['^^^^^^^^','b','','','','d'],
         'col2.1':['1','1.0',2,1.0,'1,000,000,000.00','1.00'],
@@ -29,12 +29,8 @@ def testdf():
                 'col1.2' : 'col1',
                 'date.1' : 'date'})
 
-BAD_CHARACTERS = ['$', '\\', '=', '"', "'", ' ', '\t', '?', '*']
-START_END = r'^(?=(?:{0}))|$(?<=(?:{0}))'.format #look ahead for a character/ look behind for a character
-re_PUNCTBLANK_ONLY = re.compile("(?:^[%s]+$|^$)" % punctuation)
-re_START_END_TRASH = re.compile('|'.join(START_END((
-        re.escape(i) if i in ['(', ')', '$', '\\', '?', '^', '*'] else i
-            )) for i in BAD_CHARACTERS), re.I)
+UNWANTED = ['$', '\\', '=', '"', "'", ' ', '\t', '?', '*', '|']
+re_WHITESPACEONLY = re.compile(r'^(?:[\s]+)?$')
 
 class IsNotNumeric(Exception):
     pass
@@ -70,7 +66,7 @@ def checknumeric(func):
     return inner
 
 def series_functions():
-    global dtypeobject, quickmapper, checknumeric, IsNotNumeric, re_PUNCTBLANK_ONLY, re_START_OR_END_TRASH, BAD_CHARACTERS
+    global dtypeobject, quickmapper, checknumeric, IsNotNumeric, UNWANTED, re_WHITESPACEONLY
 
     def quickdict(self, arg, *args, **kwds):
         """Create a dictionary containing the result of a function
@@ -102,7 +98,7 @@ def series_functions():
         pattern : String or compiled regex. (str, _sre.SRE_Pattern)
         [kwds] : Keyword arguments to be passed to self.str.contains.
         """
-        return self.fillna('')\
+        return self\
             .to_ascii()\
             .astype(str)\
             .str.contains(pattern,
@@ -135,14 +131,13 @@ def series_functions():
         self : pd.Series.
         [args] : Additional strings to strip. str
         """
-        mask = (self.contains(re_START_END_TRASH)) |\
-               (self.astype(str).str.endswith(args))|\
-               (self.astype(str).str.startswith(args))
+        
+        args = tuple(UNWANTED + list(args))
+        mask = (self.str.endswith(args, na = False))|\
+               (self.str.startswith(args, na = False))
 
-        args = BAD_CHARACTERS + list(args)
         self = self.modify(mask, self._strip(*args))
-        self.loc[self.contains(re_PUNCTBLANK_ONLY)] = np.nan
-        return self
+        return self.modify(self.contains(re_WHITESPACEONLY), np.nan)
 
     def to_numeric(self, integer =  False, force = False, **kwds):
         """Convert values in self to a numeric data type.
@@ -157,23 +152,16 @@ def series_functions():
             return self.fillna('').astype(str)._int(**kwds)
         return self._float(**kwds)
 
-    def isnull(self):
-        return (super(pd.Series, self).isnull()) | (self.astype(str) == '')
-
-    def notnull(self):
-        return (super(pd.Series, self).notnull()) & (self.astype(str) != '')
-
     def unique(self):
         return super(pd.Series, self.loc[self.notnull()]).unique()
 
     def to_datetime(self, fmt = False, disect = False, force = False, *args, **kwds):
-        _ = self.quickmap(is_dayfirst).any()
         return self.quickmap(Date.parse,
             fmt = fmt,
             force = force,
             disect = disect,
-            *args,
-            **mergedicts(kwds, {'dayfirst' : _}))
+            dayfirst = self.quickmap(is_dayfirst).any(),
+            *args, **kwds)
 
     def disectdate(self, fields = [], **kwds):
         return pd.DataFrame(self.to_datetime(disect = True, fields = fields, **kwds).tolist())
@@ -204,6 +192,13 @@ def series_functions():
         setattr(pd.Series, k, v)
 
 def dataframe_functions():
+
+    def counts(self, fields):
+        return self.filter(items = fields)\
+            .stack()\
+            .groupby(level = 1)\
+            .count()
+
     def rows_containing(self, pattern, fields = [], **kwds):
         if not fields:
             fields = self.columns
@@ -220,7 +215,7 @@ def dataframe_functions():
 
         joined = self.filter(**kwds)\
             .fillna('').astype(str)\
-            .apply(lambda x: char.join(x), axis = 1)._strip()
+            .apply(lambda x: char.join(x), axis = 1).clean()
 
         return pd.Series([
             np.nan if not i else i for i in joined.values
@@ -293,33 +288,31 @@ def dataframe_functions():
         return self
 
     def clean(self, *args): ##ONLY for use on entire dataframe
-        return self.manglecols()\
-            .apply(pd.Series.clean, args = args)\
-            .drop_blankfields()
+        return self.apply(pd.Series.clean, args = args).drop_blankfields()
             
     def lackingdata(df, thresh = None):
         idx = df.dropna(how = 'all', thresh = thresh).index
         return ~(df.index.isin(idx))
 
-    def get_mapper(self, keys, values, where = None):
+    def get_mapper(self, keyfield, valuefield, where = None):
 
-        """Create a dictionary with the values from field 'keys'
-        as dict keys / values from field 'values' as values.
+        """Create a dictionary with the values from 'keyfield'
+        as dict keyfield / values from 'valuefield' as values.
 
         Parameters:
         -----------
         self : pd.DataFrame
-        keys : Field name to use for dict keys.
-        values : Field name to use for dict values.
+        keyfield : Field name to use for dict keyfield.
+        valuefield : Field name to use for dict values.
         """
         try:
-            mask = self[values].notnull()
+            mask = self[valuefield].notnull()
             if where is not None:
                 mask = mask & where
 
             if mask.any():
-                __ = self.loc[mask].set_index(keys)
-                return __[values].to_dict()
+                __ = self.loc[mask].set_index(keyfield)
+                return __[valuefield].to_dict()
             return {}
         except KeyError:
             return {}

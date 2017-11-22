@@ -2,15 +2,15 @@ import re
 from collections import defaultdict
 import textract
 
-from fileIO import *
+from files import ospath, File, Folder
 
 def extract_text(path):
     return textract.process(path)
 
 def pdf2txt(path):
-    outfile = "%s.txt" % OSPath(path).stem
-    if not OSPath.exists(outfile):
-        writedata(outfile, extract_text(path))
+    outfile = "%s.txt" % ospath(path).stem
+    if not ospath.exists(outfile):
+        File.write(outfile, extract_text(path))
     return outfile
 
 class TextSearch(GenericBase):
@@ -32,20 +32,14 @@ class FolderTextSearch(TextSearch):
     def __init__(self, keywords = [], dirname = '.'):
         super(FolderTextSearch, self).__init__(dirname = dirname, keywords = keywords)
 
-    @staticmethod
-    @filehandler(mode = "U")
-    def readtxt(fh):
-        return fh.read()
-
     def get_matches(self, path):
-        return super(FolderTextSearch, self).get_matches(self.readtxt(path))
+        return super(FolderTextSearch, self).get_matches(File.read(path))
 
     def search(self, *args, **kwds):
         for path in Folder.listdir(self.dirname, **kwds):
             if path.lower().endswith('.pdf'):
                 path = pdf2txt(path)
 
-            #matches = self.get_matches(path)
             yield [{'keyword' : term, 'match' : match, 'path' : path}
                     for term in self.keywords for
                     match in self.get_matches(path) if term in match]

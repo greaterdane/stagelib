@@ -1,5 +1,4 @@
 from __future__ import division
-
 import os, gc
 from collections import defaultdict
 from functools import partial
@@ -7,13 +6,13 @@ import pandas as pd
 from pandas.parser import CParserError
 
 from generic import GenericBase, mergedicts, filterdict
-from fileIO import (OSPath, File, Tabular,
-                    ImproperCsvError, Folder,
-                    writedata, appendData,
-                    mkpath, mkdir, getcsvkwds,
-                    from_json, to_json)
+from files import (ospath, File, Tabular,
+                   ImproperCsvError, Folder,
+                   joinpath, newfolder, getcsvkwds,
+                   createcsv, readjson, writejson)
 import dataframe
 import record
+from validation import Errorcatch
 
 arrowfmt = "{} --> '{}'".format
 getfiles = partial(Folder.listdir, files_only = True)
@@ -24,99 +23,13 @@ class SchemaNotRegistered(Exception):
 class SchemaNotSpecified(Exception):
     pass
 
-class Itemcounter(object):
-    pass
-
-class Errorcheck(object):
-    ##'checklist' will contain a list of dictionaries for each key (WARNING, ERROR).
-    ##Each dictionary will consist of the following fields.
-        ## 'name' : Name of warning or error.
-        ## 'desc' : Verbose description of warning or error.
-        ## 'func' : Function used to check the warning or error.  Can be defined in list or elsewhere.
-    ##We can let items in WARNING slide, items in ERROR will prevent data from going into the database or prodution environment.
-
-    checklist = {
-        "WARNING" : [], #Can have some but not all.
-        "ERROR" : [] #Cannot have any.
-            }
-
-    def __init__(self):
-        self.erroneous = defaultdict(pd.DataFrame)
-        self.table = pd.DataFrame()
-        self.length = 0
-
-    def __radd__(self, other):
-        self.table = other.table
-        return self
-
-    def __add__(self, other):
-        self.table['count'] += other.table['count']
-        self.length += other.length
-        for k, v in other.erroneous:
-            self.erroneous[k].append(v)
-        return self
-
-    @classmethod
-    def finderrors(cls, df):
-        return cls().evaluate(df)
-
-    @property
-    def errors(self):
-        return self.table.level == 'ERROR'
-
-    @property
-    def warnings(self):
-        return self.table.level == 'WARNING'
-
-    @property
-    def danger(self):
-        return (
-            any(self.table.loc[self.warnings] / self.length == 0.75) or
-            any(self.table.loc[self.errors, 'count'] > 0)
-                )
-
-    def runchecks(self, df):
-        __ = []
-        self.length += len(df)
-        for level, items in self.checklist.items():
-            __.extend([
-                mergedicts(item, level = level, mask = item['func'](df))
-                for item in items
-                    ])
-        return __
-
-    def locatedata(self, mask, name, df):
-        __ = df.loc[mask].drop_blankfields()
-        if not __.empty:
-            self.erroneous[name].append(__)
-        return __
-
-    def parse(self, item, df):
-            __ = self.locatedata(item['mask'], item['name'], df)
-            count = len(__)
-            return {
-                'description' : item['desc'],
-                'count' : count,
-                'level' : ("Ok!" if count == 0 else item['level'])
-                    }
-
-    def evaluate(self, df):
-        items = []
-        for item in self.runchecks(df):
-            items.append(self.parse(item, df))
-        self.table = pd.DataFrame(items)
-        return self
-
-    def showresults(self, sortkeys = ['level', 'count'], **kwds):
-        print self.table.sort_values(by = sortkeys, ascending = False).prettify()
-
 class Stage(GenericBase):
-    CONFIGDIR = mkdir(OSPath.dirname(__file__), 'config')
-    SCHEMADIR = mkdir(CONFIGDIR, 'schema')
-    FIELDSDIR = mkdir(CONFIGDIR, 'fieldsmap')
-    FIELDSPATH = mkpath(FIELDSDIR, 'fieldsconfig.json')
+    CONFIGDIR = newfolder(ospath.dirname(__file__), 'config')
+    SCHEMADIR = newfolder(CONFIGDIR, 'schema')
+    FIELDSDIR = newfolder(CONFIGDIR, 'fieldsmap')
+    FIELDSPATH = joinpath(FIELDSDIR, 'fieldsconfig.json')
 
-    def __init__(self, schema_name, fieldspath = '', errorchecker = Errorcheck, **kwds):
+    def __init__(self, schema_name, fieldspath = '', errorcatch = Errorcatch, **kwds):
         self.schema_name = schema_name
         super(Stage, self).__init__(schema_name)
         self.fieldspath = self.FIELDSPATH
@@ -127,18 +40,19 @@ class Stage(GenericBase):
         self.rowsdropped = defaultdict(int)
         self.report = {}
         self.normalized = 0
-        self.errorchecker = errorchecker
-        self.errors = []
+        self.counts_in = 0
+        self.counts_out = 0
+        self.errorcatch = errorcatch(logger = self._logger, schema_name = schema_name)
 
     @classmethod
     def findschema(cls, schema_name):
-        return mkpath(cls.SCHEMADIR, '{}.json'.format(schema_name))
+        return joinpath(cls.SCHEMADIR, '{}.json'.format(schema_name))
 
     @classmethod
     def getconfig(cls, path):
-        if not OSPath.exists(path):
-            to_json(path, {})
-        return from_json(path)
+        if not ospath.exists(path):
+            writejson(path, {})
+        return readjson(path)
 
     @classmethod
     def registerschema(cls, name, fields = [], datetime_fields = [], text_fields = [], numeric_fields = [], converters = {}):
@@ -147,13 +61,13 @@ class Stage(GenericBase):
         template['datetime_fields'] = datetime_fields
         template['text_fields'] = text_fields
         template['numeric_fields'] = numeric_fields
-        to_json(cls.getschema_namepath(name), template)
+        writejson(cls.getschema_namepath(name), template)
         print "'{}' registered".format(name)
 
     @classmethod
     def get_schemaconfig(cls, schema_name):
         path = cls.findschema(schema_name)
-        if not OSPath.exists(path):
+        if not ospath.exists(path):
             raise SchemaNotRegistered, "'{}' not found.  Please register desired configuration.".format(schema_name)
         return cls.getconfig(path)
 
@@ -174,7 +88,7 @@ class Stage(GenericBase):
                 if not kwds.get('schema_name'):
                     raise SchemaNotSpecified, "Must specify a schema name."
                 else:
-                    fieldspath = mkpath(cls.FIELDSDIR, "{}_fieldsmap.json".format(kwds['schema_name']))
+                    fieldspath = joinpath(cls.FIELDSDIR, "{}_fieldsmap.json".format(kwds['schema_name']))
                 kwds['fieldspath'] = fieldspath
             fieldsmap = cls.getconfig(kwds['fieldspath'])
         return Tabular.learnfields(df, fieldsmap, **kwds)
@@ -194,38 +108,6 @@ class Stage(GenericBase):
         df.rename(columns = fieldsmap, inplace = True)
         return df.ix[:, fields]
 
-    @classmethod
-    def processfile(cls, path, filekwds = {}, *args, **kwds):
-        outdir = kwds.pop('outfile'); outdir = kwds.pop('outdir')
-        return cls(*args, **kwds).parsefile(path, outdir = outdir, outfile = outfile, **filekwds)
-
-    @classmethod
-    def processfiles(cls, dirname, filepattern = '', outdir = '', outfile = '', dataset = False, *args, **kwds):
-        filenames = getfiles(dirname, pattern = filepattern)
-        filekwds = kwds.pop('filekwds', {})
-        reports = defaultdict(list)
-        try:
-            if dataset:
-                stager = cls(*args, **kwds)
-                for filename in filenames:
-                    reports[filename].append(
-                        stager.parsefile(filename,
-                            outdir = outdir,
-                            outfile = outfile,
-                            **filekwds))
-            else:
-                for filename in filenames:
-                    reports[filename].append(cls.processfile(path,
-                        filekwds = filekwds,
-                        outdir = outdir,
-                        outfile = outfile,
-                        *args, **kwds))
-
-        except ImproperCsvError as e:
-            self.info("Encountered some bad data in '%s'.  This issue needs to be handled immediately." % filename)
-            reports['badcsvs'] = {filename : reports.pop(filename)}
-        return reports
-
     @property
     def fieldgroups(self):
         return {k : v for k, v in self.__dict__.items() if
@@ -234,12 +116,15 @@ class Stage(GenericBase):
     @property
     def learnerkwds(self):
         return dict(fieldspath = self.fieldspath,
+            fieldsmap = self.fieldsmap,
             table = self.schema_name,
-            fields = self.fields)
+            fields = self.fields,
+            path = getattr(self, 'filename', ''))
 
     @property
-    def unusedfields(self):
-        return [k for k, v in self.fieldsmap.items() if v not in self.fields]
+    def discarded_fields(self):
+        return [k for k, v in self.fieldsmap.items()
+                if v not in self.fields]
 
     @property
     def fieldsmap(self):
@@ -266,21 +151,22 @@ class Stage(GenericBase):
     def droprows(self, df, thresh = None, conditions = {}):
         conditions.update({
             "Not enough data": {
-            'mask' : lambda df: df.lackingdata(thresh = thresh),
-            'msg' : "%s rows will be dropped due to lack of data.  Valid data must have at least %s populated fields."
-                }})
+            'mask' : lambda df: df.filter(items = self.fieldsmap.values()).lackingdata(thresh = thresh),
+            'msg' : "%s rows will be dropped due to lack of data.  Valid data must have at least (%s) populated fields."
+                }
+                    })
 
         for reason, cnfg in conditions.items():
             mask = cnfg['mask'](df)
             count = mask.sum()
             if count > 0:
                 if reason == 'Not enough data':
-                    msg = cnfg['msg'] % (count, 1 if not thresh else thresh)
+                    msg = cnfg['msg'] % (count, 'any' if not thresh else thresh)
                 else:
                     msg = cnfg['msg'] % count
                 self.warning(msg)
                 self.rowsdropped[reason] += count
-                df = df.loc[~(mask)] #Where condition (an undesirable one) is NOT met.
+                df = df.loc[~(mask)]
         return df
 
     def patchmissing(self, df, exclude = []):
@@ -293,83 +179,97 @@ class Stage(GenericBase):
             except UnicodeEncodeError as e:
                 kwds.update(encoding = 'utf-8')
 
-    def parse(self, df, to_strip = '', strip_default = True, learnfields = False, **kwds):
-        if learnfields:
-            self.learnfields(df, fieldsmap = self.fieldsmap, **self.learnerkwds)
+    def parse(self, df, formatdates = False, *args, **kwds):
+        if kwds.get('learnfields'):
+            self.learnfields(df, **self.learnerkwds)
+        
+        df = df.rename(columns = self.fieldsmap).manglecols()
+        df = self.patchmissing(df.clean(*args))
+        self.counts_in += df.counts(self.fields)
 
-        df.rename(columns = self.fieldsmap, inplace = True)
-        defaultchars = ('\\', '=', '|')
-        if not strip_default:
-            defaultchars = tuple()
-
-        to_strip = [to_strip] + list(defaultchars)
-        df = self.patchmissing(df.clean(*to_strip),
-            exclude = kwds.pop('exclude', []))
-
-        self.info('The following characters have been stripped (where present): "%s"' % ''.join(to_strip))
-
+        _ = {}
         for name, fields in self.fieldgroups.items():
             flds = df.filterfields(items = fields).astype(str)
             func = self._getfunc(name)
 
+            if name == 'datetime_fields' and formatdates:
+                _['fmt'] = True
+
             if flds.any():
                 if name == 'address_fields':
-                    self.info("Data contains address information.  Attempting to extract street, city, state, and zip.")
-                    df = df.to_address()
-
+                    if hasattr(df, 'zip'):
+                        self.info("Data contains address information.  Attempting to extract street, city, state, and zip.")
+                        _z = df.zip.notnull()
+                        df.loc[_z] = df.loc[_z].to_address()
                 if not func:
                     continue
 
                 self.info("Applying function '%s' to fields '%s'" % (func.func_name, ', '.join(flds)))
-                df[flds] = df[flds].apply(func)
+                df[flds] = df[flds].apply(func, **_)
+                _ = {}
 
-        df = self.droprows(self._conform(df))
-        #self.errors.append(self.errorchecker.finderrors(df))
+        return self.droprows(self._conform(df))
+
+    def process(self, df, *args, **kwds):
+        df = self.parse(df, *args, **kwds); print
+        self.errorcatch.evaluate(df)
+        self.counts_out += df.counts(self.fields).dropna()
         return df
 
-    def parsefile(self, path, outfile = '', outdir = 'processed', learnfields = True, **kwds):
-        mkdir(outdir)
-        if 'converters' not in kwds:
-            kwds.update(converters = self.converters)
+    def evaluate(self):
+        _ = self.counts_in - self.counts_out
+        self.counts = pd.DataFrame({
+            'counts_in' : self.counts_in,
+            'counts_out' : self.counts_out.dropna(),
+            'diff' : _})
 
-        _file = File.guess(path, **getcsvkwds(kwds))
-        self.filename = _file.basename()
+        self.rowsdropped['Rows skipped (before and including column header)'] += self.fobj.rowsdropped
+        total_rd = sum(self.rowsdropped.values())
+        _ = self.counts['diff'].sum() - total_rd
+        self.report.update(filename = self.filename,
+                           fileproperties = self.fobj.properties,
+                           totaldropped = total_rd,
+                           rowsdropped = self.rowsdropped,
+                           errorcatch = self.errorcatch,
+                           correct = self.errorcatch.danger,
+                           counts_per_field = self.counts,
+                           rowstruncated = True if _ >= 1 else False)
 
+        #reportfile = "{}_{}".format(ospath.basename(self.fobj.stem), reportfile) ##this may go soon
+        #self.errorcatch.save(reportfile, counts = self.counts)  ##save report
+
+    def processfile(self, path_or_fobj, outfile = '', outdir = 'processed', learn = True, save_output = True, *args, **kwds): #fobj being an object of type files.File (Csv, Excel, etc.)
+        if isinstance(path_or_fobj, (str, basestring)):
+            if 'converters' not in kwds:
+                kwds.update(converters = self.converters)
+            self.fobj = File.guess(path_or_fobj, **getcsvkwds(kwds))
+        else:
+            self.fobj = path_or_fobj
+
+        if self.fobj.preprocessed:
+            learn = False
+
+        self.filename = self.fobj.basename()
+
+        newfolder(outdir)
         if not outfile:
-            stem = OSPath(self.filename).stem
-            outfile = "{}_output.csv".format(stem)
+            outfile = self.fobj.get_outfile(outdir, self.filename)
 
-        outfile = mkpath(outdir, outfile)
-        writedata(outfile, ','.join(self.fields) + "\n")
-
-        if not learnfields:
-            kwds.update(learnfields = True)
-
-        dfreader = _file.dfreader(fieldsmap = self.fieldsmap,
-            learnfields = learnfields, **self.learnerkwds)
+        dfreader = self.fobj.dfreader(learnfields = learn, **self.learnerkwds)
+        createcsv(outfile, self.fields)
 
         for df in dfreader:
             try:
-                df = self.parse(df, **filterdict(kwds, 'strip|learn'))
+                df = self.process(df, *args, **kwds)
                 self.normalized += len(df)
-                appendData(outfile, self.to_string(df))
+                yield df
             except CParserError:
-                self.warning("%s contains embedded delimters that are not escaped.  Attemping to locate culprit rows." % self.filename)
-                badlines = Csv.getbadlines(_file.path,
-                    delimiter = _file.delimiter)
-                try:
-                    raise ImproperCsvError
-                finally:
-                    return badlines
+                self.warning("Found rows with embedded delimiters in '%s'. Attemping to locate culprits." % self.filename)
+                self.report['badlines'] = Csv.getbadlines(self.fobj.path, delimiter = self.fobj.delimiter)
+            except IncompleteExcelFile as e:
+                self.warning(e.message)
+                self.report['incomplete_excel'] = self.filename
 
-        self.info("Normalized data written to '%s'" % outfile)
-        self.rowsdropped['Rows skipped (before and including column header)'] += _file.rowsdropped
-
-        __ = _file.properties
-        __.udpate(rows_normalized = self.normalized)
-        errors = sum(self.errors)
-        return mergedicts(self.report,
-            fileproperties = __,
-            rowsdropped = self.rowsdropped,
-            errors = errors,
-            valid = errors.danger)
+            if save_output:
+                File.append(outfile, self.to_string(df))
+        self.evaluate()

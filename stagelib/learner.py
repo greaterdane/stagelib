@@ -27,10 +27,12 @@ def learn_fields(df, fieldsmap, fields = [], table = '', path = '', strict = Tru
     if set(fields).issuperset(df.columns):
         return fieldsmap
 
+    add_end = False
     start = 0
     end = len(df.columns)
     if end >= 60:
-        end = 10
+        end = 20
+        add_end = True
 
     for i, field in enumerate(df.columns):
         if str(field) in fieldsmap:
@@ -62,7 +64,8 @@ def learn_fields(df, fieldsmap, fields = [], table = '', path = '', strict = Tru
                     break
                 choice = choice2
             start += i
-            end += i
+            if add_end:
+                end += 1
             break
 
         fieldsmap.update({field : choice})
