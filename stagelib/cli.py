@@ -118,8 +118,10 @@ class Listdir(ProcessorCommand):
 class Normalize(ProcessorCommand):
     @staticmethod
     def func(row):
-        raise NotImplementedError
-    
+        schema_name = getattr(row, 'schema_name', '')
+        stager = Stage(schema_name).processfile(row.path)
+        ##save all reports
+
     @staticmethod
     def listdir(dirname, commandmap = {}, **kwds):
         if not commandmap:
