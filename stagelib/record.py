@@ -68,39 +68,41 @@ def get_zipcodes(df):
 def is_valid_us_address(df):
     return (df['zip'].str.contains(r'^\d{5}(?:-\d{4})?$')) & (df.valid)
 
-def to_address(df):
+def address_not_parsed(df):
+    if not 'zip' in df.columns:
+        df['zip'] = None
+    return df.zip.isnull()
+
+def addressconcat(df):
+    return df.joinfields(fields = USAddress.fields)
+
+def addressdisect(addresses):
     """
-    Attempts to parse DataFrame addresses into individual components.
-    DataFrame is expected to have one or more of the following fields:
-     - address1
-     - address2
-     - address3
-     - city
-     - state
-     - zip
-     
+     Takes a series containing joined address strings as values, e.g. '1234 Main st. CITY, ST 12345-0000',
+     and attempts to disect each one into individual components (address1, address2, city, state, zip).
+
      Parameters
      ----------
-     df : pd.DataFrame
+     addresses : pd.Series
     """
-    fields = sorted(USAddress.labels.keys()) + ['fulladdress']
-    fulladdresses = df.joinfields(fields = fields)
-    if fulladdresses.isnull().all():
-        return df
+    if addresses.isnull().all():
+        return addresses
 
-    df['fulladdress'] = fulladdresses
-    _parsed = fulladdresses\
+    disected = addresses\
         .dropna()\
         .quickmap(USAddress.parse)\
         .to_dict()
 
-    df[fields] = get_zipcodes(
-        pd.DataFrame(_parsed.values(),
-            index = _parsed.keys())
-                ).loc[is_valid_us_address, fields
-                    ].reindex(df.index).ix[:, fields]
+    df = get_zipcodes(
+        pd.DataFrame(disected.values(), index = disected.keys())
+            )
 
-    df['address1'] = df['address1'].combine_first(fulladdresses)
+    __ = (address_not_parsed(df)) & (is_valid_us_address(df))
+    df = df.loc[__]\
+        .reindex(df.index)\
+        .ix[:, USAddress.fields]
+
+    df['address1'] = df['address1'].combine_first(addresses)
     return df
 
 class USAddress(object):
@@ -108,6 +110,7 @@ class USAddress(object):
     labels = {k:([v] if not isinstance(v,list) else v)
               for k,v in cnfg['labels'].items()}
 
+    fields = sorted(labels.keys())
     states = idict(get_zipdata().get_mapper('State', 'State.1'))
 
     def __init__(self, address):
@@ -158,4 +161,3 @@ class USAddress(object):
 
 pd.Series.to_phone = to_phone
 pd.Series.to_name = to_name
-pd.DataFrame.to_address = to_address

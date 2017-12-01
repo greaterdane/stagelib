@@ -7,7 +7,7 @@ import dataframe
 
 def launch(program, commandmap): #launch the program
     program.start(commandmap)
-    
+
 class Program(object):
     def __init__(self, description = '', **kwds):
         self.parser = ArgumentParser(description = description, formatter_class = RawTextHelpFormatter, **kwds)
@@ -59,7 +59,7 @@ class Command(object):
         self.validate()
         if hasattr(self.args, 'sub_command'):
             delattr(self.args, 'sub_command')
-        self.args.kwds = filterdict(attrdict(self.args), filters, **kwds)
+        self.kwds = filterdict(attrdict(self.args), filters, **kwds)
 
     def execute(self):
         self.set_context_from_args()
@@ -80,11 +80,9 @@ class Processor(Program):
 
 class ProcessorCommand(Command):
     def set_context_from_args(self):
-        filters = ['pattern', 'unzip', 'distinct', 'files_only', 'recurisive']
-        super(ProcessorCommand, self).set_context_from_args(filters = filters)
-        self.args.listkwds = self.args.kwds
-        filters.extend(['showlist', 'dirname', 'infile', 'outfile', 'kwds', 'listkwds'])
-        super(ProcessorCommand, self).set_context_from_args(filters = filters, inverse = True)
+        super(ProcessorCommand, self).set_context_from_args(
+            filters = ['pattern', 'unzip', 'distinct',
+                       'files_only', 'recurisive'])
     
 class DBCommand(Command):
     @staticmethod
@@ -108,19 +106,16 @@ class Listdir(ProcessorCommand):
 
     def execute(self):
         super(Listdir, self).execute()
-        _ = self.args.dirname
-        __ = self.args.listkwds
+        dirname = self.args.dirname
         if self.args.showlist:
-            print; print "Displaying contents of '{}'\n".format(_ if _ != '.' else os.getcwd())
-            self.showlist(_, **__)
-        return self.func(_, **__)
+            print; print "Displaying contents of '{}'".format(dirname if dirname != '.' else os.getcwd())
+            self.showlist(dirname, **self.kwds)
+        return self.func(dirname, **self.kwds)
 
 class Normalize(ProcessorCommand):
     @staticmethod
-    def func(row):
-        schema_name = getattr(row, 'schema_name', '')
-        stager = Stage(schema_name).processfile(row.path)
-        ##save all reports
+    def func(row, *args, **kwds):
+        return Stage.processfile(row.path, *args, **kwds)
 
     @staticmethod
     def listdir(dirname, commandmap = {}, **kwds):
@@ -132,10 +127,10 @@ class Normalize(ProcessorCommand):
     def add_switches(sub_parser):
         sub_parser.add_argument('schema_name', nargs = '?', help = 'Name specifying table structure and nature of data to normalize.')
         sub_parser.add_argument('-i', default = '', nargs = '?', help = "One or more files for input.", dest = 'infile')
-        
+
     def set_context_from_args(self):
         super(Normalize, self).set_context_from_args()
-        self.list = self.listdir(self.args.dirname, **self.args.listkwds)
+        self.list = self.listdir(self.args.dirname, **self.kwds)
 
     def execute(self):
         super(Normalize, self).execute()

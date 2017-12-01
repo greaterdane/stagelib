@@ -63,7 +63,7 @@ def reversedict(dictionary):
 
 def filterdict(dictionary, list_or_pattern, inverse = False, flags = re.I):
     _filter = (lambda x: re.search(list_or_pattern, x, flags) if
-               len(list_or_pattern) == 1 else x in list_or_pattern)
+               isinstance(list_or_pattern, (str, unicode)) else x in list_or_pattern)
 
     func = lambda x: _filter(x)
     if inverse:
@@ -203,6 +203,21 @@ isearch = partial(search, flags = re.I)
 getdict = partial(getsearch, asdict = True)
 getgroups = partial(getsearch, n = None)
 
+class odict(dict):
+    def __getattr__(self, name):
+        if name in self:
+            return self[name]
+        raise AttributeError
+
+    def __setattr__(self, name, value):
+        self[name] = value
+
+    def __delattr__(self, name):
+        if name in self:
+            del self[name]
+        else:
+            raise AttributeError
+
 class idict(MutableMapping):
     """A case-insensitive dict-like object.
     Taken from "https://github.com/requests/requests-docs-it/blob/master/requests/structures.py"
@@ -254,7 +269,7 @@ class EasyInit(object):
 
     @staticmethod
     def add_logging_methods(obj, logger = None, extra = {}, **kwds):
-        if not logger or not hasattr(self, '_logger'):
+        if not logger or not getattr(self, '_logger', None):
             obj._logger = logging.getLogger(EasyInit.get_logger_name(obj))
         elif logger:
             obj._logger = logger
@@ -269,6 +284,7 @@ class EasyInit(object):
         @wraps(func)
         def inner(slf, *args, **kwds):
             setuplogging = kwds.pop('setuplogging', True)
+            slf._logger = kwds.pop('logger', None)
             func(slf, *args, **kwds)
 
             __ = mergedicts(kwds, self.kwds, self._kwds)

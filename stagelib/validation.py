@@ -1,6 +1,6 @@
 from __future__ import division
 import re
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from functools import wraps
 import pandas as pd
 from generic import GenericBase, mergedicts
@@ -9,7 +9,7 @@ import dataframe
 
 #validations
 #Anything beinginning with a digit, decimal point or hyphen, can contain a decimal ponit, and must end with a digit, e.g. '.012', '1.12', '-12', '-5.00', '5.00'
-re_INVALID_NUMERIC = re.compile(r'\s+|[a-z]+|(?:^(?!(?:-|\.)?\d+(?:$|\.\d+$)))')
+re_INVALID_NUMERIC = re.compile(r'\s+|[a-z!\@\']+|^(?!\d+|-|\.)|\.$')
 
 #Anything that does not start with a number greater than 0, followed by [3 digits][hyphen][2 digits][hyphen][2 digits] ('2017-11-12') OR '1970-01-01'.
 re_INVALID_DATE  = re.compile(r'^(?:(?![1-9]\d{3}-\d{2}-\d{2}$).*)')
@@ -45,14 +45,10 @@ def is_valid_name(series, **kwds):
     return ~(invalid_name(series)) & ~(name_too_many_chars(series, **kwds))
 
 class Errorcatch(GenericBase):
-    additions = {}
-    def __init__(self, schema_name = '', logger = None, **kwds):
-        self.schema_name = schema_name
-        self._logger = logger
-        super(Errorcatch, self).__init__(schema_name, **kwds)
-        self.erroneous = defaultdict(pd.DataFrame)
-        self.table = pd.DataFrame({'count' : [0], 'description': [''], 'level': ['']})
-        self.length = 0
+    ADDITIONS = {}
+    def __init__(self, *args, **kwds):
+        schema_name = kwds.pop('schema_name', '')
+        super(Errorcatch, self).__init__(schema_name, *args, **kwds)
 
     def __radd__(self, other):
         if other == 0:
@@ -60,15 +56,19 @@ class Errorcatch(GenericBase):
         return self.__add__(other)
 
     def __add__(self, other):
-        self.table['count'] += other.table['count']
-        self.length += other.length
-        for k, v in other.erroneous.items():
-            self.erroneous[k].append(v)
+        if not hasattr(self, 'table'):
+            self.table = other.table
+        else:
+            self.table['count'] += other.table['count']
+
+        self.length = getattr(self, 'length', 0) + other.length
+        for k, v in other._errors.items():
+            self._errors[k].append(v)
         return self
 
     @property
     def errors(self):
-        return self.table.level == 'ERROR'
+        return (self.table.level == 'ERROR') & (self.table['count'] > 0)
 
     @property
     def warnings(self):
@@ -76,21 +76,17 @@ class Errorcatch(GenericBase):
 
     @property
     def danger(self):
-        warnings_now_errors = (self.warnings) & (self.table['count'] / self.length >= 0.75)
-        errors = (self.errors) & (self.table['count']) > 0
-        self.table.loc[warnings_now_errors, 'level'] = 'ERROR'
-        return errors.any()
+        return self.errors.any()
 
     @property
     def checklist(self):
         __ = {"WARNING" : [], "ERROR" : []}
-        for level, items in self.additions.items():
+        for level, items in self.ADDITIONS.items():
             __[level].extend(items)
         return __
 
     def runchecks(self, df):
         __ = []
-        self.length += len(df)
         for level, items in self.checklist.items():
             __.extend([
                 mergedicts(item, level = level, mask = item['func'](df))
@@ -98,38 +94,49 @@ class Errorcatch(GenericBase):
                     ])
         return __
 
-    def locate(self, mask, name, df):
-        return df.loc[mask].drop_blankfields()
-
     def parse(self, item, df):
-            desc = item['desc']
-            level = item['level']
-            name = item['name']
-            data = self.locate(item['mask'], name, df)
-            count = len(data)
-            if count > 0:
-                getattr(self, level.lower())("%s rows found where '%s'" % (count, desc))
+        desc = item['desc']
+        level = item['level']
+        name = item['name']
+        mask = item['mask']
+        data = df.loc[mask].drop_blankfields()
+        count = mask.sum()
+        if count > 0:
+            getattr(self, level.lower())("%s rows found where '%s'" % (count, desc))
 
-            if not data.empty:
-                self.erroneous[name] = data.assign(index = data.index)
+        if not data.empty:
+            self._errors[name] = data
 
-            return {
-                'description' : desc,
-                'count' : count,
-                'level' : ("Ok!" if count == 0 else level)
-                    }
+        return {
+            'shortname' : name,
+            'description' : desc,
+            'count' : count,
+            'level' : ("Ok!" if count == 0 else level)
+                }
+
+    def _reconcile(self):
+        __ = (self.warnings) &\
+             (self.table['count'] / self.length >= 0.75)
+        self.table.loc[__, 'level'] = 'ERROR'
 
     def evaluate(self, df):
+        self.length = len(df)
+        self._errors = defaultdict(pd.DataFrame)
         self.info("Checking for errors ....")
-        self.table = pd.DataFrame([self.parse(item, df) for item in self.runchecks(df)])
+        self.table = pd.DataFrame([
+            self.parse(item, df) for item in self.runchecks(df)
+                ])
+        
+        self._reconcile()
+        self.table.sort_values(by = ['count', 'level'],
+                               ascending = False,
+                               inplace = True)
         return self
 
     def save(self, outfile, **kwds):
-        self.info("Saving erroneous data to disk, this may take a moment ....")
-        error_report = mergedicts(self.erroneous, totals = self.table, **kwds)
-        df2excel(outfile, **error_report)
-        for k, v in self.erroneous.items():
-            self.erroneous[k] = v.index
+        self.info("One moment please.  Saving errors to '%s'." % outfile)
+        sheets = OrderedDict(mergedicts(self._errors, **kwds))
+        df2excel(outfile, keepindex = True, **sheets)
         
-    def showresults(self, sortkeys = ['count', 'level'], **kwds):
-        print; print self.table.sort_values(by = sortkeys, ascending = False).prettify()
+    def showresults(self, **kwds):
+        print; print self.table.prettify(**kwds)

@@ -7,11 +7,11 @@ from peewee import *
 from playhouse.shortcuts import RetryOperationalError
 
 from generic import reversedict, logging_setup, chunker
-from files import readjson
+from files import joinpath, readjson
 import dataframe
 
 filterwarnings('ignore', category = MySQLdb.Warning)
-logger = logging_setup(name = 'db', level = logging.INFO)
+db_logger = logging_setup(name = 'db', level = logging.INFO)
 
 def _get_credentials(path = 'login.json'):
     return readjson(path)
@@ -54,16 +54,14 @@ def _insertdecorator(func):
     @wraps(func)
     def inner(cls, rows, chunksize = 2500):
         tablename = cls._meta.db_table
-        logger.info("Insertion queued for table '{}' ({} rows)".format(tablename, len(rows)))
+        db_logger.info("Insertion queued for table '%s' (%s rows)" % (tablename, len(rows)))
         rowgroups = chunker(rows, chunksize)
         inserted = 0
         with cls._meta.database.atomic():
             for _rows in rowgroups:
-                logger.info("Inserted {} rows...".format(len(_rows)))
                 _inserted = func(cls, _rows)
                 inserted += _inserted
-                logger.info("{} rows inserted".format(_inserted))
-        logger.info("{} rows successfully inserted into '{}'".format(inserted, tablename))
+        db_logger.info("%s rows successfully inserted into '%s'" % (inserted, tablename))
         return inserted
     return inner
 
@@ -86,22 +84,19 @@ def get_basemodel(database):
                 try:
                     inserted.append(cls.insert(**row).execute())
                 except IntegrityError as e:
-                    logger.error(e)
+                    db_logger.error(e)
                 except OperationalError as e:
-                    logger.error(e)
+                    db_logger.error(e)
             return len(inserted)
 
         @classmethod
         def insertdf(cls, df, extrafields = [], bulk = False, **kwds):
-            fields = [field for field in df.filter_fields(items = cls._meta.fields.keys())
-                      if field not in extrafields]
-
-            rows = df.dropna(subset = fields, how = 'all')\
-                .filter(items = fields + extrafields)\
-                .fillna('').to_dict(orient = 'records')
+            rows = df.filter(
+                items = cls._meta.fields.keys() + extrafields
+                    ).dropna(how = 'all').fillna('').to_dict(orient = 'records')
 
             if not rows:
-                logger.warning("Nothing to insert ({}).  All fields ('{}') are blank.".format(cls.__name__, ', '.join(fields)))
+                db_logger.warning("Nothing to insert (%s).  All fields ('%s') are blank." % (cls.__name__, ', '.join(fields)))
                 return
 
             if bulk:
@@ -114,7 +109,13 @@ def get_basemodel(database):
             if reversed:
                 return reversedict(__)
             return __
-            
+
+        @staticmethod
+        def _path(dirname, filename):
+            return joinpath(dirname, filename)
+
+        def __str__(self):
+            return self.__repr__()
 
     dbproxy.initialize(database)
     return BaseModel
@@ -131,10 +132,10 @@ class CustomMySQLDatabase(RetryOperationalError, MySQLDatabase):
         if not fields:
             fields = Csv(path).testrows[0]
         if overwrite:
-            logger.warning("Overwriting table '%s' with contents of '%s'." % (table, path))
-            logger.warning('truncate %s' % table)
+            db_logger.warning("Overwriting table '%s' with contents of '%s'." % (table, path))
+            db_logger.warning('truncate %s' % table)
     
-        logger.info("Importing '%s' into '%s'" % (path, table))
+        db_logger.info("Importing '%s' into '%s'" % (path, table))
         
         return cursor.execute("""
             LOAD DATA LOCAL INFILE "{path}"

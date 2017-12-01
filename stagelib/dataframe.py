@@ -6,7 +6,7 @@ import numpy as np
 from tabulate import tabulate
 
 import generic
-from generic import mergedicts, strip, to_single_space, remove_non_ascii, fuzzyprep, integer, floating_point
+from generic import mergedicts, strip, to_single_space, remove_non_ascii, fuzzyprep, integer, floating_point, punctuation
 from timeutils import Date, is_dayfirst
 
 pd.set_option('display.max_colwidth', -1)
@@ -23,14 +23,12 @@ def testdf():
         'col2.2':['hey','hey','hi','hi','hey','hi'],
         'name':['***john doe','hello','---','------------------','messy \t\t\t\t??','messy \t\t\t\t$$'],
         'date':['12-01-2004','April 15, 2015','aug, 27 2017','9/15/15','???????????','?'],
-        'date.1':['01-12-2004','April 15, 2015','aug, 27 2017','12/10/15','16/9/15','10/12/15']}).\
-            rename(columns = {
-                'col1.1' : 'col1',
-                'col1.2' : 'col1',
-                'date.1' : 'date'})
+        'date.1':['01-12-2004','April 15, 2015','aug, 27 2017','12/10/15','16/9/15','10/12/15']})
 
+PUNCTUPLE = tuple(punctuation)
 UNWANTED = ['$', '\\', '=', '"', "'", ' ', '\t', '?', '*', '|']
 re_WHITESPACEONLY = re.compile(r'^(?:[\s]+)?$')
+re_NONPRINT = re.compile(r'[^\s20-\x7E\t\r\n ]')
 
 class IsNotNumeric(Exception):
     pass
@@ -121,6 +119,11 @@ def series_functions():
     to_fuzzy = quickmapper(generic.fuzzyprep)
 
     @dtypeobject
+    def is_punctuation(self):
+        return self.str.startswith(PUNCTUPLE, na = False) &\
+               self.str.endswith(PUNCTUPLE, na = False)
+
+    @dtypeobject
     def clean(self, *args):
         """Strip whitespace and given punctuation from self.
         In addition, attempt to locate values that consist of punctuation
@@ -136,8 +139,13 @@ def series_functions():
         mask = (self.str.endswith(args, na = False))|\
                (self.str.startswith(args, na = False))
 
-        self = self.modify(mask, self._strip(*args))
-        return self.modify(self.contains(re_WHITESPACEONLY), np.nan)
+        self = self.modify(mask, self._strip(*args)
+            ).modify(self.contains(re_NONPRINT),
+                self.to_ascii())
+
+        return self.modify(
+            (self.contains(re_WHITESPACEONLY)) | (self.is_punctuation()),
+                np.nan)
 
     def to_numeric(self, integer =  False, force = False, **kwds):
         """Convert values in self to a numeric data type.
@@ -193,11 +201,14 @@ def series_functions():
 
 def dataframe_functions():
 
-    def counts(self, fields):
+    def fieldcounts(self, fields):
         return self.filter(items = fields)\
             .stack()\
             .groupby(level = 1)\
             .count()
+
+    def fieldcounts_unique(self, fields):
+        return self.filter(items = fields).apply(pd.Series.nunique)
 
     def rows_containing(self, pattern, fields = [], **kwds):
         if not fields:
@@ -227,29 +238,6 @@ def dataframe_functions():
                 ])
         __ = self.groupby(_, axis = 1).size()
         return __[__ > 1].index
-
-    def manglecols(self):
-        duplicates = self.dupcols()
-        if not any(duplicates):
-            return self
-
-        dmap = {}
-        defmap = defaultdict(list)
-        for i, f in enumerate(self.columns):
-            if f in self.columns:
-                defmap[f].append(i)
-            else:
-                dmap.update({i : f})
-
-        for k, v in defmap.items():
-            [dmap.update({
-                i2 : "%s.%s.%s" % (k, i1, i2) if i1 > 0 else k
-                    }) for i1,i2 in enumerate(v)]
-
-        self.columns =  pd.Index([
-            str(dmap[i]) for i,c in enumerate(self.columns)
-                ])
-        return self
 
     def combine_dupcols(self, field):
         """
