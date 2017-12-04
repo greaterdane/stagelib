@@ -117,7 +117,7 @@ class Stage(GenericBase):
                            table = kwds.pop('schema_name', ''), **kwds)
 
     @classmethod
-    def conform(cls, df, schema_name = None, learn = False, fieldspath = '', fields = [], fieldsmap = {}, **kwds):       
+    def conform(cls, df, schema_name = None, learn = False, fieldspath = '', fields = [], fieldsmap = {}, **kwds):
         if not fields:
             if schema_name:
                 fields = cls.getfields(schema_name)
@@ -198,17 +198,20 @@ class Stage(GenericBase):
         return self.conform(df, fields = self.fields, **kwds)
 
     def droprows(self, df, thresh = None, conditions = {}):
-        _ec = self.errorcatch.evaluate(df)
-        _mapping = _ec.table.get_mapper('shortname', 'description')
-        __ = [(k, v) for k, v in _ec._errors.items()
-              if k in _ec.table.loc[_ec.errors, 'shortname'].values]
+        if self.errorcatch:
+            _ec = self.errorcatch.evaluate(df)
+            _mapping = _ec.table.get_mapper('shortname', 'description')
+            __ = [(k, v) for k, v in _ec._errors.items()
+                  if k in _ec.table.loc[_ec.errors, 'shortname'].values]
 
-        _c = {
-            name : {
-            'mask' : lambda df: df.index.isin(data.index),
-            'msg' : "Dropping %s rows where '%s'"
-                } for name, data in __
-                    }
+            _c = {
+                name : {
+                'mask' : lambda df: df.index.isin(data.index),
+                'msg' : "Dropping %s rows where '%s'"
+                    } for name, data in __
+                        }
+        else:
+            _c = {}
 
         _c["Not enough data"] = {
             'mask' : lambda df: df.filter(items = self.fieldsmap.values()).lackingdata(thresh = thresh),
@@ -222,7 +225,7 @@ class Stage(GenericBase):
             if count > 0:
                 if reason == 'Not enough data':
                     msg = msg % (count, 'any' if not thresh else thresh)
-                elif reason in self.errorcatch._errors.keys():
+                elif self.errorcatch and reason in self.errorcatch._errors.keys():
                     msg = msg % (count, _mapping[reason])
                 else:
                     msg = msg % count
@@ -231,7 +234,8 @@ class Stage(GenericBase):
                 self.rowsdropped[reason] += count
                 df = df.loc[~(mask)]
 
-        self.errors.append(_ec)
+        if self.errorcatch:
+            self.errors.append(_ec)
         return df
 
     def patchmissing(self, df, exclude = []):
@@ -255,6 +259,9 @@ class Stage(GenericBase):
                 _kwds['fmt'] = True
 
             if flds.any():
+                if not func:
+                    continue
+
                 df[flds] = df[flds].apply(func, **_kwds)
                 self.info("Applying function '%s' to fields '%s'" % (  func.func_name,  ', '.join(flds)  ))
                 _kwds = {}
@@ -271,7 +278,9 @@ class Stage(GenericBase):
         self.total_rowsdropped = sum(self.rowsdropped.values())
         self.errorcatch = sum(self.errors)
         delattr(self, 'errors')
-        self.unsafe = self.errorcatch.danger
+        if self.errorcatch:
+            self.unsafe = self.errorcatch.danger
+
         self.counts = pd.DataFrame({
             'countsin' : self.countsin,
             'countsout' : self.countsout,

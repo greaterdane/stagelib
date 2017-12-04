@@ -21,7 +21,7 @@ def importpandas(func):
     @wraps(func)
     def inner(*args, **kwds):
         global pd, np
-        
+
         if not pd:
             import pandas as pd
 
@@ -140,7 +140,7 @@ def parsexml(path, tagstart, tagstop):
         row = {}
         for item in data:
             row.update(dict(item.values()[0]))
-        rows.append(row)        
+        rows.append(row)
     return rows
 
 @importpandas
@@ -171,7 +171,7 @@ def getcsvkwds(kwds):
 is_nonfield = partial(search, re_NONFIELD)
 def non_header(row, ml, thresh = 0.4):
     """Determine if row is the header row.
-    
+
     Parameters:
     ----------
     row : List or array representing a row of data.
@@ -270,12 +270,12 @@ class File(ospath):
     def move(filename, destination = 'processing', overwrite = False, auto_rename = True):
         if overwrite:
             auto_rename = False
-    
+
         name = ospath.basename(filename)
         destfile = ospath(joinpath(destination, name))
         movefile = True
         number = 1
-    
+
         while True:
             if not destfile.exists():
                 break
@@ -291,23 +291,23 @@ class File(ospath):
                     files_logger.info("'%s' will be overwritten." % (name))
                 else:
                     movefile = False; break
-    
+
         if movefile:
             files_logger.info("Moving '%s' to '%s'" % (filename, destination))
             shutil.move(filename, destfile.path)
-    
+
         return destfile.path
 
     @staticmethod
     @filehandler(mode = "rb")
     def read(fh):
         return fh.read()
-    
+
     @staticmethod
     @filehandler(mode = 'wb')
     def write(fh, data):
         fh.write(data)
-    
+
     @staticmethod
     def append(fh, data, mode = 'ab'):
         File.write(fh, data, mode = mode)
@@ -375,7 +375,7 @@ class Tabular(File):
         if not any(i in self.kwds for i in ['header', 'skiprows', 'names']):
             skiprows, names = locateheader(rows)
             self.rowsdropped += skiprows
-            
+
             if 'converters' not in self.kwds:
                 self.kwds.update({i : str for i in names})
 
@@ -405,8 +405,7 @@ class Csv(Tabular):
         self.fixcsv = search(self.re_BADTAIL, self.testraw)
         self.delimiter = self.sniff(self.testraw)
         self.kwds.update(low_memory = False,
-                         error_bad_lines = False,
-                         engine = 'python')
+                         error_bad_lines = False)
 
     @classmethod
     def sniff(cls, x):
@@ -479,10 +478,6 @@ class Csv(Tabular):
             self._rules = mergedicts(delimiter = self.delimiter,
                                      **self.getrules(self.testrows))
         return self._rules
-
-    @filehandler(mode = "U")
-    def head(self, **kwds):
-        super(Csv, self).head(**kwds)
 
     def fix(self, data):
         return self.re_BADTAIL.sub(r'\1\n', data)
@@ -643,7 +638,7 @@ class Folder(ospath):
         self.info("Total distinct files: %s." % len(self.distinctfiles))
         self.info("Total duplicate files: %s." % len(self.duplicatefiles))
 
-    def _movefiles(self, filelist, destination, newzipfile = '', **kwds):       
+    def _movefiles(self, filelist, destination, newzipfile = '', **kwds):
         moved = []
         countfiles = len(filelist)
 

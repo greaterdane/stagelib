@@ -85,7 +85,7 @@ def addressdisect(addresses):
      ----------
      addresses : pd.Series
     """
-    if addresses.isnull().all():
+    if all(addresses.isnull()):
         return addresses
 
     disected = addresses\
@@ -101,8 +101,6 @@ def addressdisect(addresses):
     df = df.loc[__]\
         .reindex(df.index)\
         .ix[:, USAddress.fields]
-
-    df['address1'] = df['address1'].combine_first(addresses)
     return df
 
 class USAddress(object):
@@ -161,3 +159,4 @@ class USAddress(object):
 
 pd.Series.to_phone = to_phone
 pd.Series.to_name = to_name
+pd.Series.addressdisect = addressdisect
