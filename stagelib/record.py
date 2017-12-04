@@ -44,7 +44,7 @@ def to_name(self):
     return pd.DataFrame([
         d for d in self.modify(
             self.notnull(),
-            self.fillna('').astype(str).quickmap(getname)
+            self.quickmap(getname)
                 )], index = self.index).clean()
 
 #address
