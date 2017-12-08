@@ -195,7 +195,7 @@ class Stage(GenericBase):
         for k, v in __.items():
             attr = getattr(self, k, None)
             if attr:
-                v.udpate(count = attr,
+                v.update(count = attr,
                          table = self.schema)
                 self.issues.append(v)
 
