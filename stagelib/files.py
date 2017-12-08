@@ -9,19 +9,23 @@ from collections import Counter, defaultdict, OrderedDict
 from functools import partial, wraps
 
 from generic import *
+from fieldlearner import locatefields
 from timeutils import utcnow
 
 pd = None
 np = None
-re_NONFIELD = re.compile('^(?:\s+)?(?:(?:\$)?\d+(?:[-\/\.\s,]+|$)|[%s]|[\|,\t]+(?:\s+)?)' % punctuation)
+DELIMITERS = '|,\t;:'
 re_ERROR = re.compile(r'^Skipping line (?P<line>\d+): expected (?P<expected_length>\d+) fields, saw (?P<length>\d+)$')
+re_KEY = re.compile(r'((?<=get)(size|[a-z]time)|([a-z]+name|^ext$))')
+re_BADTAIL = re.compile(r'(^.*?"),"\n', re.M)
 files_logger = logging_setup(name = __name__)
 
+#DECORATORS
 def importpandas(func):
     @wraps(func)
     def inner(*args, **kwds):
         global pd, np
-
+        
         if not pd:
             import pandas as pd
 
@@ -55,6 +59,7 @@ def filehandler(mode = "rb"):
         return inner
     return decorator
 
+#PATHS
 @pathdeco
 def defaultdir(path):
     if path.isfile():
@@ -67,29 +72,38 @@ def joinpath(path, *args):
 
 @pathdeco
 def timestamped_path(path, datefmt = "%Y-%m-%d_%I.%M.%S", *args):
-    return "{0}_{1}_.{2}".format(path.stem, utcnow().strftime(datefmt), path.ext)
+    return "{0}_{1}_.{2}".format(path.stem,
+                                 utcnow().strftime(datefmt),
+                                 path.ext)
+@pathdeco
+def filegetter(path, dest, **kwds):
+    if path.isfile():
+        func = File.shuttle
+    elif path.isdir():
+        func = Folder.shuttlefiles
+    return func( str(path), dest, **kwds )
 
-def get_homedir():
-    return ospath.dirname(__file__)
+filemover = partial(filegetter, method = 'move')
+filecopier = partial(filegetter, method = 'copy')
+move_distinct_files = partial(filemover, distinct = True)
 
 def newfolder(dirname, *args):
-    _dirname = joinpath(dirname, *args)
-    if not ospath.exists(_dirname):
-        os.mkdir(_dirname)
-    return _dirname
+    nf = joinpath(dirname, *args)
+    if not ospath.exists(nf):
+        os.mkdir(nf)
+    return nf
 
-def is_zipfile(path):
-    return zipfile.is_zipfile(path) and r'.xls' not in path
-
+#ZIPFILES
 @pathdeco
 def filezip(path, newzipfile, mode = 'w', allowZip64 = True, compression = zipfile.ZIP_DEFLATED, **kwds):
     files_logger.info("Compressing '%s' to '%s'" % (path.basename(), newzipfile))
     with zipfile.ZipFile(newzipfile,
-        mode = mode,
-        allowZip64 = allowZip64,
-        compression = compression,
-        **kwds) as zf:
-        zf.write(path.abspath(), path.basename())
+                         mode = mode,
+                         allowZip64 = allowZip64,
+                         compression = compression,
+                         **kwds) as zf:
+        zf.write(path.abspath(),
+                 path.basename())
 
 def fileunzip(zipname, outdir = None, recursive = False, **kwds):
     files_logger.info("Extracting contents of '%s'" % zipname)
@@ -108,20 +122,22 @@ def fileunzip(zipname, outdir = None, recursive = False, **kwds):
             fileunzip(path)
     return outdir
 
-@filehandler()
-def getmd5(fh):
-    _md5 = hashlib.md5()
-    while fh.tell() != ospath.getsize(fh.name):
-        _md5.update(fh.read(658760))
-    return _md5.hexdigest()
+def is_zipfile(path):
+    return zipfile.is_zipfile(path) and r'.xls' not in path
 
+def not_zipfile(path):
+    return not is_zipfile(path)
+
+#JSON/XML
 @filehandler(mode = 'r')
 def readjson(fh):
     return json.loads(fh.read())
 
 @filehandler(mode = 'wb')
 def writejson(fh, data):
-    fh.write(json.dumps(data, sort_keys = True, indent = 4,))
+    fh.write(json.dumps(data,
+                        sort_keys = True,
+                        indent = 4,))
 
 def xmlLoop(path, tagstart, tagstop):
     iterxml = ET.iterparse(path)
@@ -139,69 +155,46 @@ def parsexml(path, tagstart, tagstop):
     for data in xmlLoop(path, tagstart, tagstop):
         row = {}
         for item in data:
-            row.update(dict(item.values()[0]))
-        rows.append(row)
+            row.update(  dict(item.values()[0])  )
+        rows.append(row)        
     return rows
 
+#PANDAS HELPERS
 @importpandas
-def xml2df(path, tagstart, tagstop):
-    return pd.DataFrame(
-        parsexml(path, tagstart, tagstop)
-            )
+def xml2df(path, *args):
+    return pd.DataFrame(  parsexml(path, *args)  )
 
 @importpandas
-def df2excel(output_file, keepindex = False, df = None, **kwds):
-    xlwriter = pd.ExcelWriter(output_file)
+def df2excel(outfile, keepindex = False, df = None, **kwds):
+    xlwriter = pd.ExcelWriter(outfile)
     if df is not None:
         kwds = mergedicts({'Sheet1' : df}, kwds)
 
     for sheetname, _df in kwds.items():
         if keepindex:
-            df = df.reset_index()
-        df.to_excel(xlwriter,
+            _df.reset_index(inplace = True)
+
+        _df.to_excel(xlwriter,
             sheet_name = sheetname,
             index = False,
             encoding = 'utf-8')
     xlwriter.save()
 
-@importpandas
-def getcsvkwds(kwds):
-    return filterdict(kwds, pd.read_csv.func_code.co_varnames)
-
-is_nonfield = partial(search, re_NONFIELD)
-def non_header(row, ml, thresh = 0.4):
-    """Determine if row is the header row.
-
-    Parameters:
-    ----------
-    row : List or array representing a row of data.
-    ml : The mode length of a group of rows
-    [thresh] : The threshold percentage at which the row cannot contain blanks.  Defaults to 0.4.
-    """
-    pctblank = row.count('')/ml
-    is_data = any(  map(is_nonfield, row)  ) #cells containing 'non field' data, e.g. numbers, other misc numeric data, dates, etc.
-    return pctblank >= thresh or is_data or not row[0 : int(ml * .5)] #False if % of blanks >= thresh, the row contains data, or the first half is empty.
-
-@importpandas
-def locateheader(rows, **kwds):
-    lens = {i : len(l)  for i,l in enumerate(rows)}
-    ml = np.bincount(lens.values()).argmax()
-    for ix, v in lens.items():
-        if v >= (ml):
-            break
-
-    for i, row in enumerate(rows[ix:], ix):
-        row = map(lambda x: x.strip().replace('\n', ' '), row)
-        if non_header(row, ml, **kwds):
-            continue
-        return i + 1, row
-    else:
-        return ix, Tabular.createheader(ml)
+#MISC
+@filehandler()
+def getmd5(fh): #multiprocess this in Folder
+    _md5 = hashlib.md5()
+    while fh.tell() != ospath.getsize(fh.name):
+        _md5.update(fh.read(658760))
+    return _md5.hexdigest()
 
 @filehandler(mode = 'wb')
-def createcsv(fh, fields, delimiter = ','):
-    csvwriter = csv.writer(fh, delimiter = delimiter)
+def createcsv(fh, fields, **kwds):
+    csvwriter = csv.writer(fh, **kwds)
     csvwriter.writerow(fields)
+
+def tsparse(timestamp, strfmt = "%Y-%m-%d %I:%M:%S"): #parse file timestamp
+    return date.fromtimestamp(timestamp).strftime(strfmt)
 
 class ospathMeta(type):
     _methods = attrdict(os.path)
@@ -212,35 +205,45 @@ class ospathMeta(type):
 
 class ospath(GenericBase):
     __metaclass__ = ospathMeta
-    _iskey = partial(search, r'((?<=get)(size|[a-z]time)|([a-z]+name|^ext$))')
 
     def __init__(self, path, setuplogging = False, *args, **kwds):
         self.path = path
-        super(ospath, self).__init__(path, setuplogging = setuplogging, *args, **kwds)
+        super(ospath, self).__init__(path,
+                                     setuplogging = setuplogging,
+                                     *args, **kwds)
         grabfunctions(self, os.path, 'path')
-        self.stem, self.ext = map(lambda x: x.strip('.'), self.splitext())
-
+        self.stem, self.ext = map(lambda x: x.strip('.'),
+                                  self.splitext())
     def __str__(self):
         return self.path
+
     def __repr__(self):
         return "%s(%s)" % (self.__class__.__name__, self.path)
 
     @staticmethod
     def get_outfile(filename, dirname = ''):
-        return ospath.join(dirname, "%s_output.csv" % ospath(filename).stem)
-
+        _ = ospath(filename).stem
+        return ospath.join(dirname,
+                           "%s_output.csv" % _)
     @property
     def properties(self):
         if not hasattr(self, '_properties'):
-            self._properties = {}
-            for k, v in self.__dict__.items():
-                if self._iskey(k):
-                    k = self._iskey(k).group(1)
-                    if callable(v):
-                        v = v()
-                        if 'time' in k:
-                            v = date.fromtimestamp(v).strftime("%Y-%m-%d %I:%M:%S")
-                    self._properties.update({k : v})
+            return self._getproperties()
+        return self._properties
+
+    def _getproperties(self):
+        self._properties = {}
+        for k, v in self.__dict__.items():
+            if not re_KEY.search(k):
+                continue
+
+            if callable(v):
+                v = v()
+                if 'time' in k:
+                    v = tsparse(v)
+
+            k = getsearch(re_KEY, k)
+            self._properties.update({k : v})
         return self._properties
 
 class NotSupported(Exception):
@@ -262,25 +265,24 @@ class File(ospath):
             for i, data in enumerate(chunker(fh, chunksize = self.chunksize)):
                 yield ''.join(data)
 
-    @classmethod
-    def countrows(cls, path, **kwds):
-        return cls.guess(path)._countrows(**kwds)
-
     @staticmethod
-    def move(filename, destination = 'processing', overwrite = False, auto_rename = True):
+    def shuttle(filename, dest, overwrite = False, auto_rename = True, method = 'move'):
+        if method not in ['move', 'copy']:
+            raise Exception, "Valid methods are 'move' or 'copy'."
+
         if overwrite:
             auto_rename = False
-
+    
         name = ospath.basename(filename)
-        destfile = ospath(joinpath(destination, name))
-        movefile = True
+        destfile = ospath(  joinpath(dest, name)  )
+        flag = True
         number = 1
-
+    
         while True:
             if not destfile.exists():
                 break
             else:
-                files_logger.info("File '%s' exists in '%s'." % (destfile.basename(), destination))
+                files_logger.info("File '%s' exists in '%s'." % (destfile.basename(), dest))
                 if auto_rename:
                     stem, ext = destfile.splitext()
                     _ = "{}_{}{}".format(re.sub(r'_\d+$', '', stem), number, ext)
@@ -290,24 +292,20 @@ class File(ospath):
                 elif overwrite:
                     files_logger.info("'%s' will be overwritten." % (name))
                 else:
-                    movefile = False; break
+                    flag = False; break
+        if flag:
+            action = re.sub(r'(^.*?)(?:e|$)',
+                            r'\1ing', method).capitalize()
 
-        if movefile:
-            files_logger.info("Moving '%s' to '%s'" % (filename, destination))
-            shutil.move(filename, destfile.path)
-
-        return destfile.path
-
-    @staticmethod
-    @filehandler(mode = "rb")
-    def read(fh):
-        return fh.read()
+            files_logger.info("%s '%s' to '%s'" % (action, filename, dest))
+            getattr(shutil, method)(filename, destfile.path)
+        return [destfile.path]
 
     @staticmethod
     @filehandler(mode = 'wb')
     def write(fh, data):
         fh.write(data)
-
+    
     @staticmethod
     def append(fh, data, mode = 'ab'):
         File.write(fh, data, mode = mode)
@@ -319,41 +317,47 @@ class File(ospath):
         except xlrd.XLRDError as e:
             try:
                 return Csv(path, **kwds)
-            except (csv.Error, UnicodeDecodeError) as e:
-                pass
-        except Exception as e:
-            files_logger.error("An unkown error has occured: %s" % e)
-        raise NotSupported(path, e)
+            except (csv.Error, UnicodeDecodeError, Exception) as e:
+                raise NotSupported(path, e)
 
     @filehandler(mode = "rb")
-    def head(self, n = 50):
+    def head(self, n = 50, **kwds):
         for i in chunker(self, n): return ''.join(i)
 
-    def _countrows(self, chunksize = 500000, mode = "U"):
-        if not hasattr(self, '_nrows'):
-            if isinstance(self, Excel):
-                self._nrows = sum(i.nrows for i in self.sheets)
-                return self._nrows
+    @filehandler(mode = "U")
+    def _countrows(self, chunksize = 600000):
+        count, offset, size = 0, 0, os.stat(self.name).st_size
+        while offset < size:
+            count += self.read(chunksize).count('\n')
+            offset = self.tell()
+        return count
 
-            rows, offset, size = 0, 0, self.getsize()
-            with open(self.path, mode = mode) as fh:
-                while offset < size:
-                    data = fh.read(chunksize)
-                    offset = fh.tell()
-                    rows += data.count('\n')
-                self._nrows = rows; return rows
-        return self._nrows
+    def countrows(self, **kwds):
+        if not hasattr(self, 'rows_original'):
+            if isinstance(self, Excel):
+                self.rows_original = sum(i.nrows for i in self.sheets)
+            else:
+                self.rows_original = self._countrows(**kwds)
+        return self.rows_original
 
 class Tabular(File):
-    NULLS = ['null', 'NULL', 'None', 'none', '<none>', '<None>', 'N/A', 'NaN', 'n/a', 'nan'] + list(punctuation)
     def __init__(self, path, setuplogging = True, *args, **kwds):
         super(Tabular, self).__init__(path, setuplogging = setuplogging, *args, **kwds)
-        na_values = kwds.pop('na_values', [])
-        na_values.extend(self.NULLS)
-        self.kwds.update(kwds, na_values = na_values,
-                         keep_default_na = False)
+        self.kwds.update(kwds, keep_default_na = False)
         self.rowsdropped = 0
         self.preprocessed = False
+
+    @classmethod
+    @importpandas
+    def _iterdataframe(cls, func):
+        def inner(self):
+            if not self.preprocessed:
+                self.preprocess()
+
+            for df in func(self):
+                yield df; gc.collect()
+            gc.disable(); gc.collect()
+        return inner
 
     @staticmethod
     def createheader(length = 10):
@@ -361,48 +365,35 @@ class Tabular(File):
                    enumerate(xrange(1, length + 1), 1))
     @property
     def properties(self):
-        return mergedicts(rows_original = self._countrows(),
-            **super(Tabular, self).properties)
+        return mergedicts(rows_original = self.countrows(),
+                          **super(Tabular, self).properties)
+    @property
+    def dfreader(self):
+        return self._dfreader()
 
-    def preprocess(self, **kwds):
+    def preprocess(self):
+        self.countrows()
         for i in ['mode', 'lineterminator']:
             self.kwds.pop(i, '')
-        self._countrows()
-        self.preprocessed = True
         return self
 
     def getrules(self, rows):
         if not any(i in self.kwds for i in ['header', 'skiprows', 'names']):
-            skiprows, names = locateheader(rows)
+            skiprows, names = locatefields(rows)
             self.rowsdropped += skiprows
-
+            
             if 'converters' not in self.kwds:
-                self.kwds.update({i : str for i in names})
-
+                self.kwds.update(converters = {i : str for i in names})
             return dict(skiprows = skiprows, names = names, header = None)
         return {}
 
-    @classmethod
-    @importpandas
-    def _iterdataframe(cls, func):
-        def inner(self, *args, **kwds):
-            if not self.preprocessed:
-                self.preprocess(**kwds)
-
-            rows = 0
-            for df in func(self, *args):
-                rows += len(df)
-                yield df; gc.collect()
-            gc.disable(); gc.collect()
-        return inner
+    def _dfreader():
+        raise NotImplementedError
 
 class Csv(Tabular):
-    DELIMITERS = '|,\t;:'
-    re_BADTAIL = re.compile(r'(^.*?"),"\n', re.M)
-
     def __init__(self, path, mode = "U", chunksize = 185000, **kwds):
         super(Csv, self).__init__(path, mode = mode, chunksize = chunksize, **kwds)
-        self.fixcsv = search(self.re_BADTAIL, self.testraw)
+        self.fixcsv = re_BADTAIL.search(self.testraw)
         self.delimiter = self.sniff(self.testraw)
         self.kwds.update(low_memory = False,
                          error_bad_lines = False)
@@ -410,7 +401,7 @@ class Csv(Tabular):
     @classmethod
     def sniff(cls, x):
         for k, v in Counter(x).most_common():
-            if k in cls.DELIMITERS:
+            if k in DELIMITERS:
                 return str(k)
         raise csv.Error
 
@@ -438,7 +429,8 @@ class Csv(Tabular):
     @staticmethod
     @filehandler(mode = 'rb')
     def getlines(fh, linenumbers):
-        return [[i] + row for i, row in enumerate(csv.reader(fh), 1) if i in linenumbers]
+        return [[i] + row for i, row in enumerate(csv.reader(fh), 1)
+                if i in linenumbers]
 
     @staticmethod
     @importpandas
@@ -449,18 +441,19 @@ class Csv(Tabular):
         df = pd.DataFrame(badlines)
         for length, data in df.groupby('length'):
             __ = pd.DataFrame(
-                Csv.getlines(path, data.line.values)
-                    )
+                Csv.getlines(path, data.line.values))
 
-            __.rename(columns = {0 : 'line'}, inplace = True)
+            __.rename(columns = {0 : 'line'},
+                      inplace = True)
+
             sheets.update({ "length_{}".format(length) :  __})
 
-        sheets = OrderedDict(mergedicts(sheets, kwds))
-        df2excel(outfile, **sheets)
+        df2excel(outfile,
+                 **OrderedDict( mergedicts(sheets, kwds)) )
 
     @property
     def testraw(self):
-        return remove_non_ascii(self.head())
+        return remove_non_ascii(self.head(mode = "U"))
 
     @property
     def testrows(self):
@@ -480,20 +473,19 @@ class Csv(Tabular):
         return self._rules
 
     def fix(self, data):
-        return self.re_BADTAIL.sub(r'\1\n', data)
+        return re_BADTAIL.sub(r'\1\n', data)
 
     def fileswap(self):
         os.remove(self.path)
         os.rename(self.tempfile, self.path)
 
-    def preprocess(self, learnfields = False, **kwds):
-        self = super(Csv, self).preprocess()
+    def preprocess(self):
+        super(Csv, self).preprocess()
         if self.fixcsv:
             for data in self:
                 self.append(self.tempfile, self.fix(data))
                 gc.disable(); gc.collect()
             self.fileswap()
-        return self
 
     def reader(self, data):
         buf = StringIO(remove_non_ascii(data))
@@ -501,10 +493,13 @@ class Csv(Tabular):
                 delimiter = self.delimiter, quoting = 1)]
 
     @Tabular._iterdataframe
-    def dfreader(self, **kwds):
+    def _dfreader(self):
         self.kwds['chunksize'] = self.kwds.pop('chunksize', self.chunksize)
-        __ = pd.read_csv(self.path, **mergedicts(self.rules, self.kwds, kwds))
-        for df in __:
+        __ = pd.read_csv(self.path,
+                         **mergedicts(self.rules,
+                                      self.kwds))
+        for i, df in enumerate(__, 1):
+            print; self.info("ITERATION: %s" % i)
             yield df
 
 class IncompleteExcelFile(Exception):
@@ -517,6 +512,10 @@ class Excel(Tabular):
         super(Excel, self).__init__(path, mode = mode, **kwds)
         self.wb = xlrd.open_workbook(self.path, on_demand = True)
         self.emptysheets = []
+
+    @property
+    def sheets(self):
+        return list(self.wb.sheets())
 
     def _csvbuffer(self, rows):
         __ = StringIO()
@@ -532,33 +531,30 @@ class Excel(Tabular):
         return [map(lambda x: remove_non_ascii(str(x)),
                 sheet.row_values(n)) for n in xrange(nrows)]
 
-    @property
-    def sheets(self):
-        return list(self.wb.sheets())
-
-    def preprocess(self, learnfields = False, **kwds):
-        self = super(Excel, self).preprocess()
+    def preprocess(self):
+        super(Excel, self).preprocess()
         self._sheets = {}
         for sheet in self.sheets:
             if sheet.nrows > 1:
                 rows = self.reader(sheet, nrows = 50)
                 rules = mergedicts(self.getrules(rows),
-                                nrows = sheet.nrows, **self.kwds)
+                                   nrows = sheet.nrows, **self.kwds)
                 self._sheets.update({sheet.name :  rules})
-        return self
 
     @Tabular._iterdataframe
-    def dfreader(self, **kwds):
+    def _dfreader(self):
         for name, rules in self._sheets.items():
+            print; self.info("SHEET: '%s'" % name)
             if rules['nrows'] == 65536:
                 raise IncompleteExcelFile(sheet.name)
 
             df = pd.read_excel(self.path, sheetname = name,
-                               **mergedicts(rules, self.kwds, **kwds))
+                               **mergedicts(rules, self.kwds))
             if df.empty:
-                self.emptysheets.append(name)
-                continue
+                self.warning("'%s' CONTAINS NO DATA" % name)
+                self.emptysheets.append(name); continue
             yield df
+        self.wb.release_resources()
 
 class Folder(ospath):
     def __init__(self, path, pattern = '', recursive = False, files_only = False, **kwds):
@@ -571,7 +567,7 @@ class Folder(ospath):
         self.recursive = recursive
         self.files_only = files_only
         super(Folder, self).__init__(path,
-            setuplogging = kwds.pop('setuplogging', True))
+              setuplogging = kwds.pop('setuplogging', True))
 
     @staticmethod
     def compressfiles(filenames, newzipfile = '', **kwds):
@@ -579,20 +575,23 @@ class Folder(ospath):
             newzipfile = 'original.zip'
 
         for path in filenames:
-            filezip(path, ospath.abspath(newzipfile), mode = 'a', **kwds)
+            filezip(path, ospath.abspath(newzipfile),
+                    mode = 'a', **kwds)
 
     @staticmethod
     def unzipfiles(zipfiles, recursive = False, outdir = None):
         for zipname in zipfiles:
-            outdir = fileunzip(zipname, recursive = recursive, outdir = outdir)
+            outdir = fileunzip(zipname,
+                               recursive = recursive,
+                               outdir = outdir)
         return outdir
 
     @classmethod
     def listdir(cls, dirname, **kwds):
-        folder = cls(dirname, **kwds)
-        if not folder.recursive:
-            return list(folder)
-        return (i for i in folder)
+        fldr = cls(dirname, **kwds)
+        if fldr.recursive:
+            return (i for i in fldr)
+        return list(fldr)
 
     @classmethod
     @importpandas
@@ -601,15 +600,16 @@ class Folder(ospath):
                              in cls.listdir(*args, **kwds)])
 
     @classmethod
-    def movefiles(cls, fromdir, destination, distinct = False, **kwds):
-        __ = kwds.pop('newzipfile', '')
-        fldr = cls(fromdir, **kwds)
+    def shuttlefiles(cls, dirname, dest, distinct = False, files_only = True, pattern = '', **kwds):
+        fldr = cls(dirname,
+                   files_only = files_only,
+                   pattern = pattern)
         if distinct:
-            filelist = [i for i in fldr.listdistinct()]
+            fl = [i for i in fldr.listdistinct()]
         else:
-            fldr.files_only = True
-            filelist = filter(lambda x: not is_zipfile(x), fldr)
-        return fldr._movefiles(destination, newzipfile = __)
+            setattr(fldr, 'files_only', True)
+            fl = filter(not_zipfile, fldr)
+        return fldr._shuttlefiles(fl, dest, **kwds)
 
     @property
     def zipfiles(self):
@@ -635,33 +635,38 @@ class Folder(ospath):
             self.distinctfiles.add(v[0])
             yield v[0]
 
-        self.info("Total distinct files: %s." % len(self.distinctfiles))
-        self.info("Total duplicate files: %s." % len(self.duplicatefiles))
+        self.info("Total distinct files: %s" % len(self.distinctfiles))
+        self.info("Total duplicate files: %s" % len(self.duplicatefiles))
 
-    def _movefiles(self, filelist, destination, newzipfile = '', **kwds):
-        moved = []
+    def _shuttlefiles(self, filelist, dest, newzipfile = '', archive = True, **kwds):       
+        shuttled = []
         countfiles = len(filelist)
 
-        if not self.zipfiles:
+        if kwds.get('method') == 'copy':
+            archive = False
+
+        if not self.zipfiles and archive:
             self.compressfiles(filelist, newzipfile)
 
         for filename in filelist:
-            moved.append(File.move(filename, destination = destination, **kwds))
-
-        countmoved = len(moved)
+            shuttled.extend(
+                File.shuttle(filename,
+                             dest = dest,
+                             **kwds)); print
+        count = len(shuttled)
         try:
-            assert countmoved == countfiles
+            assert count == countfiles
         except AssertionError:
-            self.warning("Only %s of %s files were moved to '%s'" % (countmoved, countfiles, destination))
+            self.warning("Only %s of %s files have been relocated to '%s'" % (count, countfiles, dest))
             return [name for name in filelist if
                     not ospath.basename(name) in
-                    map(ospath.basename, moved)]
+                    map(ospath.basename, shuttled)]
 
-        self.info("All files (%s of %s) have been successfully moved to '%s'" % (countmoved, countfiles, destination))
-        if ospath.exists(self.unzipped_to):
-            self.warning("Deleting '%s'" % self.unzipped_to)
-            shutil.rmtree(self.unzipped_to)
-        return moved
+        if hasattr(self, 'unzipped_to') and kwds.get('method', 'move') is 'move':
+            if ospath.exists(self.unzipped_to):
+                self.warning("Removing '%s'" % self.unzipped_to)
+                shutil.rmtree(self.unzipped_to)
+        return shuttled
 
     def _walk(self):
         if not self.recursive:
@@ -678,7 +683,6 @@ class Folder(ospath):
                     if not self.search(x = path):
                         continue
                     yield path
-
     def __iter__(self):
         for path in self._walk():
             yield path

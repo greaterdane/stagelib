@@ -4,10 +4,9 @@ from collections import defaultdict, OrderedDict
 from functools import partial
 import pandas as pd
 
-from generic import GenericBase, odict, mergedicts, filterdict
+from generic import GenericBase, filterdict, requiresattr, getkwds
 from files import (ospath, File, Tabular, Csv, Folder,
-                   IncompleteExcelFile, joinpath,
-                   newfolder, getcsvkwds,
+                   IncompleteExcelFile, joinpath, newfolder,
                    createcsv, readjson, writejson)
 import dataframe
 from fieldlearner import learnfields
@@ -16,58 +15,77 @@ from validation import Errorcatch
 
 getfiles = partial(Folder.listdir, files_only = True)
 
+def getfields(schema):
+    return Stage.get_schemaconfig(schema).get('fields')
+
 class Summary(object):
     AGGREGATIONS = {}
-    def __init__(self, gbfields):
-        self.gbfields = gbfields
-        self.uniq = set()
+    def __init__(self, gbfields, unqiuefields = []):
+        self.gbfields = [gbfields]
+        self.uniquefields = uniquefields
+        self.uniq = defaultdict(set)
 
     def agg(self, df, where = lambda x: x):
-        return df.loc[where].easyagg(self.gbfields, **self.AGGREGATIONS)
+        return df.loc[where].easyagg(self.gbfields,
+                                     **self.AGGREGATIONS)
+    def add_uniques(self, df):
+        for field in self.uniquefields:
+            self.uniq["unique_%s" % field].update(df[field].unique())
 
     def get_totals(self, aggd):
-        self.total = pd.DataFrame(columns = aggd.columns)
+        total = pd.DataFrame(columns = aggd.columns)
         for field in aggd.columns:
-            if field == self.gbfields:
-                continue
+            if field not in self.gbfields:
+                _ = field.split('_')[0]\
+                   .replace('count', 'sum')
+    
+                total[field] = [getattr(aggd[field], _)()]
 
-            series = aggd[field]
-            _ = field.split('_')[0]\
-                .replace('count', 'sum')
-
-            func = getattr(series, _)
-            aggdict.update()
-            self.total[field] = [func()]
-        return aggd.append(totalsrow)
-
-class SchemaNotRegistered(Exception):
-    pass
-
-class SchemaNotSpecified(Exception):
-    pass
+        total.assign(**{k: len(v) for k, v in self.uniq})
+        return aggd.append(total)
 
 class Stage(GenericBase):
     CONFIGDIR = newfolder(ospath.dirname(__file__), 'config')
     SCHEMADIR = newfolder(CONFIGDIR, 'schema')
     FIELDSDIR = newfolder(CONFIGDIR, 'fieldsmap')
-    FIELDSPATH = joinpath(FIELDSDIR, 'fieldsconfig.json')
+    FIELDSPATH =  joinpath(FIELDSDIR, 'fields_map.json')
 
-    def __init__(self, schema_name, *args, **kwds):
-        self.schema_name = schema_name
-        super(Stage, self).__init__(schema_name, *args)
+    def __init__(self, schema, *args, **kwds):
+        self.schema = schema
+        self.ready = False
+        super(Stage, self).__init__(schema, *args)
         self.fieldspath = kwds.pop('fieldspath', self.FIELDSPATH)
-        errorcatcher = kwds.pop('errorcatcher', Errorcatch)
+        errorcatcher = kwds.pop('errorcatcher', None)
+        if errorcatcher:
+            self.errorcatch = errorcatcher(logger = self._logger,
+                                           schema = schema, *args)
         self.load()
         self.rowsdropped = defaultdict(int)
+        self.incomplete_excel = 0
         self.normalized = 0
         self.countsin = 0
         self.countsout = 0
-        self.errors = []
-        self.errorcatch = errorcatcher(logger = self._logger, schema_name = schema_name, *args)
 
+    def __radd__(self, other):
+        if other == 0:
+            return self
+        return self.__add__(other)
+
+    def __add__(self, other):
+        if hasattr(self, 'errorcatch'):
+            self.errorcatch += other.errorcatch
+
+        if not hasattr(self, 'issues'):
+            self.issues = other.issues
+        else:
+            self.issues.extend(other.issues)
+
+        self.counts = self.counts.append(other.counts)
+        self.ready = other.ready
+        
     @classmethod
-    def findschema(cls, schema_name):
-        return joinpath(cls.SCHEMADIR, '{}.json'.format(schema_name))
+    def findschema(cls, schema):
+        return joinpath(cls.SCHEMADIR, '{}.json'.format(schema))
 
     @classmethod
     def getconfig(cls, path):
@@ -76,59 +94,47 @@ class Stage(GenericBase):
         return readjson(path)
 
     @classmethod
-    def registerschema(cls, name, fields = [], datetime_fields = [], text_fields = [], numeric_fields = [], converters = {}):
-        template = cls.getconfig(cls.getschema_namepath('template'))
+    def registerschema(cls, name, fields = [], datetime_fields = [], text_fields = [], numeric_fields = [], converters = {}, **kwds):
+        template = get_schemaconfig('template')
+        map(lambda x: template.update({x[0] : x[1]}),
+                                      kwds.items())
         template['fields'] = fields
         template['datetime_fields'] = datetime_fields
         template['text_fields'] = text_fields
         template['numeric_fields'] = numeric_fields
-        writejson(cls.getschema_namepath(name), template)
+        writejson(cls.get_findschema(name), template)
         print "'{}' registered".format(name)
 
     @classmethod
-    def get_schemaconfig(cls, schema_name):
-        path = cls.findschema(schema_name)
-        if not ospath.exists(path):
-            raise SchemaNotRegistered, "'{}' not found.  Please register desired configuration.".format(schema_name)
-        return cls.getconfig(path)
-
-    @classmethod
-    def getfields(cls, schema_name):
-        __ = cls.get_schemaconfig(schema_name)
-        if 'fields' not in __:
-            raise SchemaNotRegistered, "{} is missing 'fields' attribute, please re-register or edit config path '{}'.".format(schema_name, cls.findschema)
-        return __['fields']
+    def get_schemaconfig(cls, schema):
+        return cls.getconfig( cls.findschema(schema) )
 
     @classmethod
     def learnfields(cls, df, usedefault = False, **kwds):
         fieldsmap = kwds.pop('fieldsmap', {})
         if not fieldsmap:
             if not kwds.get('fieldspath'):
-                if usedefault:
-                    fieldspath = cls.FIELDSPATH
-                if not kwds.get('schema_name'):
-                    raise SchemaNotSpecified, "Must specify a schema name."
-                else:
-                    fieldspath = joinpath(cls.FIELDSDIR, "{}_fieldsmap.json".format(kwds['schema_name']))
+                fieldspath = cls.FIELDSPATH
             else:
                 fieldspath = kwds.pop('fieldspath')
-            fieldsmap.update(cls.getconfig(fieldspath))
-        return learnfields(df, fieldsmap,
-                           table = kwds.pop('schema_name', ''), **kwds)
+
+            fieldsmap.update(  cls.getconfig(fieldspath)  )
+
+        fieldsmap = learnfields(df, fieldsmap,
+                                table = kwds.pop('schema', ''), **kwds)
+        writejson(fieldspath, fieldsmap)
+        return fieldsmap
 
     @classmethod
-    def conform(cls, df, schema_name = None, learn = False, fieldspath = '', fields = [], fieldsmap = {}, **kwds):
-        if not fields:
-            if schema_name:
-                fields = cls.getfields(schema_name)
-            else:
-                raise SchemaNotSpecified, "Must provide one of 'fields' or 'schema_name'."
+    def conform(cls, df, schema = None, learn = False, fieldspath = '', fields = [], fieldsmap = {}, **kwds):       
+        if not fields and schema:
+            fields = getfields(schema) or []
 
         if learn:
             fieldsmap.update(
                 cls.learnfields(df,
                     fieldspath = fieldspath,
-                    schema_name = schema_name,
+                    schema = schema,
                     fields = fields,
                     **kwds))
             df.rename(columns = fieldsmap, inplace = True)
@@ -138,14 +144,6 @@ class Stage(GenericBase):
     def processfile(cls, path, *args, **kwds):
         return cls(*args)._processfile(path, **kwds)
 
-    @staticmethod
-    def to_csvstring(df, **kwds):
-        while True:
-            try:
-                return df.to_csv(index = False, header = False, **kwds)
-            except UnicodeEncodeError as e:
-                kwds.update(encoding = 'utf-8')
-
     @property
     def fieldgroups(self):
         return {k : v for k, v in self.__dict__.items() if
@@ -154,7 +152,7 @@ class Stage(GenericBase):
     @property
     def learnerkwds(self):
         return dict(fieldspath = self.fieldspath,
-            schema_name = self.schema_name,
+            schema = self.schema,
             fields = self.fields,
             path = getattr(self, 'filename', ''))
 
@@ -165,8 +163,10 @@ class Stage(GenericBase):
 
     @property
     def fieldskept(self):
-        return filterdict(self.fieldsmap,
-            self.discarded_fields, inverse = True).values()
+        return list({
+            v for k, v in self.fieldsmap.items()
+            if v not in self.discarded_fields
+                })
 
     @property
     def fieldsmap(self):
@@ -174,13 +174,33 @@ class Stage(GenericBase):
 
     @property
     def header(self):
-        return self.conform(
-            pd.DataFrame({f : [] for f in self.fields}),
-            fields = self.fields)
+        return self.conform(pd.DataFrame({f : [] for f in self.fields}),
+                            fields = self.fields)
+    def gatherissues(self):
+        self.issues = []
+        if hasattr(self, 'errorcatch'):
+            _ = self.errorcatch.table\
+                .filter(regex = 'desc|count')\
+                .loc[self.errorcatch.errors]
+    
+            for d in _.to_dict(orient = 'records'):
+                d.update(table = self.schema,
+                         category = "PARSING_ERROR")
+                self.issues.append(d)
+
+        __ = dict(rowstruncated =  {'description' : "Data was been truncated during normalization.", 'category' : "DATA_TRUNCATED"},
+                  incomplete_excel =  {'description' : "Excel sheet contains 65536 rows, data suspected incomplete.", 'category' : "INCOMPLETE_EXCELFILE"},
+                  badlinescount =  {'description' : "Bad lines have been truncated in csv file.", 'category' : "BADCSV"})
+
+        for k, v in __.items():
+            attr = getattr(self, k, None)
+            if attr:
+                v.udpate(count = attr,
+                         table = self.schema)
+                self.issues.append(v)
 
     def load(self):
-        __ = self.get_schemaconfig(self.schema_name)
-        for k, v in __.items():
+        for k, v in self.get_schemaconfig(self.schema).items():
             if k == 'converters':
                 v = {k2 : eval(v2) for k2, v2 in v.items()}
             setattr(self, k, v)
@@ -189,168 +209,142 @@ class Stage(GenericBase):
         return df.fieldcounts(self.fieldskept)
 
     def _getfunc(self, name):
-        name = "to_{}".format(name.split('_')[0])
-        if not hasattr(pd.Series, name):
-            return
-        return getattr(pd.Series, name)
+        return getattr(pd.Series,
+                       'to_%s' % name.split('_')[0], None)
 
     def _conform(self, df, **kwds):
         return self.conform(df, fields = self.fields, **kwds)
 
     def droprows(self, df, thresh = None, conditions = {}):
-        if self.errorcatch:
-            _ec = self.errorcatch.evaluate(df)
-            _mapping = _ec.table.get_mapper('shortname', 'description')
-            __ = [(k, v) for k, v in _ec._errors.items()
-                  if k in _ec.table.loc[_ec.errors, 'shortname'].values]
+        conditions["Not enough data"] = {'mask' : lambda df: df\
+            .filter(items = self.fieldskept)\
+            .lackingdata(thresh = thresh)}
 
-            _c = {
-                name : {
-                'mask' : lambda df: df.index.isin(data.index),
-                'msg' : "Dropping %s rows where '%s'"
-                    } for name, data in __
-                        }
-        else:
-            _c = {}
-
-        _c["Not enough data"] = {
-            'mask' : lambda df: df.filter(items = self.fieldsmap.values()).lackingdata(thresh = thresh),
-            'msg' : "%s rows will be dropped due to lack of data.  Valid data must have at least (%s) populated fields."
-                }
-
-        conditions.update(_c)
         for reason, _dict in conditions.items():
-            mask, msg = _dict['mask'](df), _dict['msg']
+            mask = _dict['mask'](df)
             count = mask.sum()
             if count > 0:
+                msg = "Dropping %s rows where '%s'" % (count, reason)
                 if reason == 'Not enough data':
-                    msg = msg % (count, 'any' if not thresh else thresh)
-                elif self.errorcatch and reason in self.errorcatch._errors.keys():
-                    msg = msg % (count, _mapping[reason])
-                else:
-                    msg = msg % count
-
-                self.warning(msg)
+                    msg =  "%s.  Data must have at least (%s) populated fields" % (msg, thresh)
                 self.rowsdropped[reason] += count
-                df = df.loc[~(mask)]
-
-        if self.errorcatch:
-            self.errors.append(_ec)
+                self.warning(msg)
+                df = df.loc[~(mask)] #mask is NOT met.
         return df
 
     def patchmissing(self, df, exclude = []):
         return df.patchmissing(exclude = exclude)
 
-    def parse(self, df, formatdates = False, *args, **kwds):
-        self.learnfields(df, self.fieldsmap,
-                         **self.learnerkwds)
+    def parse(self, df, learnfields = True, **kwds):
+        if learnfields:
+            self.learnfields(df, self.fieldsmap,
+                             endcheck = kwds.get('endcheck'),
+                             **self.learnerkwds)
 
-        self.info("Cleaning data (removing non-printable characters, unwanted punctuation, stripping whitespace)")
-        df = self.patchmissing(  df.rename(columns = self.fieldsmap).clean(*args)  )
-        self.info("Data has been cleaned.")
+        df = self.patchmissing(
+            df.rename(columns = self.fieldsmap)\
+              .clean(nulls = kwds.get('nulls', []),
+                     *kwds.get('omitchars', '')))
+
         self.countsin += self.countvalues(df)
 
-        _kwds = {}
         for name, fields in self.fieldgroups.items():
-            flds = df.filterfields(items = fields).astype(str)
             func = self._getfunc(name)
+            if func:
+                if (name == 'datetime_fields' and kwds.get('formatdates')):
+                    func = partial(func, fmt = True)
 
-            if name == 'datetime_fields' and formatdates:
-                _kwds['fmt'] = True
+                f = df.filterfields(items = fields).astype(str)
+                if f.any():
+                    df[f] = df[f].apply(func)
 
-            if flds.any():
-                if not func:
-                    continue
-
-                df[flds] = df[flds].apply(func, **_kwds)
-                self.info("Applying function '%s' to fields '%s'" % (  func.func_name,  ', '.join(flds)  ))
-                _kwds = {}
-
-        return self._conform(df)
+        return self.droprows(self._conform(df))
 
     def process(self, df, *args, **kwds):
+        conditions = kwds.pop('conditions', {})
         df = self.parse(df, *args, **kwds)
-        df = self.droprows(df)
-        self.countsout += self.countvalues(df)
-        return df
+        if hasattr(self, 'errorcatch'):
+            self.errorcatch.evaluate(df)
+            errors = [(k, v) for k, v in self.errorcatch._errors.items()
+                      if k in self.errorcatch.table.loc[self.errorcatch.errors, 'shortname'].values]
+
+            conditions = {name : {'mask' : lambda df: df.index.isin(data.index)}
+                          for name, data in errors}
+            self.ready = self.errorcatch.ready
+        return self.droprows(df, conditions = conditions)
 
     def evaluate(self):
         self.total_rowsdropped = sum(self.rowsdropped.values())
-        self.errorcatch = sum(self.errors)
-        delattr(self, 'errors')
-        if self.errorcatch:
-            self.unsafe = self.errorcatch.danger
-
         self.counts = pd.DataFrame({
             'countsin' : self.countsin,
             'countsout' : self.countsout,
             'diff' : self.countsin - self.countsout
                 }).dropna()
 
-        self.datalost = False
-        _ = self.counts['diff'].sum() - self.rowsdropped["Not enough data"]
-        if _ >= 1:
-            self.datalost = True
+        self.rowstruncated = (self.counts['diff'].sum() -
+                              self.rowsdropped["Not enough data"])
+        if self.rowstruncated:
+            self.ready = False
 
-        __ = getattr(self, 'fobj', None)
-        properties = None
-        if __:
-            self.rowsdropped['Rows skipped'] += self.fobj.rowsdropped
-            properties = self.fobj.properties
+        if getattr(self, '_file', None):
+            self.rowsdropped['Rows skipped'] += self._file.rowsdropped
+            self.fileproperties = self._file.properties
+        
+        if hasattr(self, 'filename'):
+            self.counts['filename'] = self.filename
 
-        self.report = odict(fileproperties = properties,
-                            rowsdropped = self.rowsdropped,
-                            valuecounts = self.counts)
+        self.gatherissues()
+        if not self.issues:
+            self.ready = True
         return self
 
-    def _processfile(self, path_or_fobj, outfile = '', outdir = 'processed', learn = True, testbadlines = True, *args, **kwds):
-        self.info("Start normalization - '%s'" % path_or_fobj)
-        if isinstance(path_or_fobj, (str, basestring)):
-            if 'converters' not in kwds:
-                kwds.update(converters = self.converters)
-            self.fobj = File.guess(path_or_fobj, **getcsvkwds(kwds))
-        else:
-            self.fobj = path_or_fobj
+    def _processfile(self, path_or_file, *args, **kwds):
+        self.info("START")
+        self._file = path_or_file
+        if isinstance(path_or_file, (str, basestring)):
+            self._file = File.guess(path_or_file,
+                                    **getkwds(kwds, pd.read_csv))
 
-        self.filename = self.fobj.basename()
-        if testbadlines and isinstance(self.fobj, Csv):
+        self.filename = self._file.basename()
+        if kwds.get('testbadlines') and isinstance(self._file, Csv):
             self.info("Checking rows in '%s' for embedded delimiters." % self.filename)
-            self.badlines = Csv.locate_badlines(self.fobj.path,
-                                                delimiter = self.fobj.delimiter)
+            self.badlines = Csv.locate_badlines(self._file.path,
+                                                delimiter = self._file.delimiter)
 
             self.badlinescount = len(self.badlines)
             if self.badlinescount >= 1:
-                self.warning("%s lines containing embedded delimiters have been found in '%s'." % (self.badlinescount, self.filename))
+                self.warning("%s bad lines have been found in '%s'." % (self.badlinescount, self.filename))
 
+        _ = newfolder( kwds.get('outdir', 'processed') )
+        outfile = kwds.get('outfile')
         if not outfile:
-            outfile = self.fobj.get_outfile(self.filename,
-                                            dirname = newfolder(outdir))
-        dfreader = self.fobj.dfreader()
+            outfile = self._file.get_outfile(self.filename,
+                                            dirname = _)
         createcsv(outfile, self.fields)
-        for df in dfreader:
+        for df in self._file.dfreader:
             try:
-                self.info("Currently processing '%s'" % self.filename)
                 df = self.process(df, *args, **kwds)
+                self.countsout += self.countvalues(df)
                 self.normalized += len(df)
-                File.append(outfile, self.to_csvstring(df))
             except IncompleteExcelFile as e:
-                self.warning(e.message)
-                self.incomplete_excel = True
+                self.incomplete_excel += 1
+            
+            File.append(outfile, df.to_csvstring(header = False))
+            self.info("%s rows written to %s" % (len(df), outfile))
             gc.disable(); gc.collect()
 
-        if hasattr(self.fobj, 'emptysheets'):
-            self.emptysheets = self.fobj.emptysheets
-
-        self.info("End normalization - '%s'" % path_or_fobj)
-        self.info("%s rows normalized" % self.normalized); print
+        self.emptysheets = getattr(self._file, 'emptysheets', None)
+        self.info("END"); print
         return self.evaluate()
 
+    @requiresattr('badlines')
     def savebadlines(self, outfile = ''):
-        Csv.savebadlines(self.fobj.path,
+        Csv.savebadlines(self._file.path,
                          self.badlines,
                          outfile = outfile,
                          _fixed = self.header)
 
+    @requiresattr('errorcatch')
     def save_errors(self, outfile = 'reported_errors.xlsx', **kwds):
         if self.errorcatch._errors:
             self.errorcatch.save(outfile, _fixed = self.header, **kwds)

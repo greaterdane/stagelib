@@ -5,6 +5,12 @@ from generic import attrdict, mergedicts, filterdict
 from files import Folder, File
 import dataframe
 
+DISPLAY = """
+CONTENTS OF '{}'""".format
+
+def getborder(x, char = '*'):
+    return char * len(x)
+
 def launch(program, commandmap): #launch the program
     program.start(commandmap)
 
@@ -40,8 +46,7 @@ class Program(object):
         return self.parser.parse_args(*args)
 
     def _add_switches(self): # add arguments here.
-        self.parser.add_argument('-a', dest = 'a', help = 'This is an argument for the main program with switch "a".')
-        self.parser.add_argument('-b', dest = 'b', help = 'This is an argument for the main program with switch "b"')
+        pass
 
 class Command(object):
     def __init__(self, args):
@@ -49,28 +54,30 @@ class Command(object):
 
     @staticmethod
     def add_switches(sub_parser): # add arguments here.
-        sub_parser.add_argument('-a', dest='command1_a', help='This is an argument for "command1" with switch "a".')
-        sub_parser.add_argument('-b', dest='command1_b', help='This is an argument for "command1" with switch "b".')
+        pass
 
     def validate(self):
         pass
 
-    def set_context_from_args(self, filters = [], **kwds):
+    def set_context_from_args(self, filters = []):
+        kwds = {}
+        for name in filters:
+            kwds[name] = getattr(self.args, name)
+            delattr(self.args, name)
+        self.args.kwds = kwds
         self.validate()
-        if hasattr(self.args, 'sub_command'):
-            delattr(self.args, 'sub_command')
-        self.kwds = filterdict(attrdict(self.args), filters, **kwds)
 
     def execute(self):
         self.set_context_from_args()
 
-class Processor(Program):
+class Stagelib(Program):
     def __init__(self, **kwds):
-        super(Processor, self).__init__(description = "Command line tool for data preparation.", **kwds)
+        super(Stagelib, self).__init__(description = "Command line tool for data preparation.", **kwds)
 
     def _add_switches(self): # add arguments here.
         self.parser.add_argument('-o', default = '', help = "Output file for task result.", dest = 'outfile')
-        self.parser.add_argument('-d', nargs = '?', help = "Directory containing input files.  Defaults to your current working directory.", default = '.', dest = 'dirname')
+        self.parser.add_argument('-i', nargs = '?', help = "One or more files for input.", dest = 'infile')
+        self.parser.add_argument('-d', nargs = '?', help = "Directory containing input files.  Defaults to your current working directory.", default = os.getcwd(), dest = 'dirname')
         self.parser.add_argument('-m', '--pattern', default = '', help = "Pattern to match when filtering a directory, e.g. '*.csv' or 'file.*?.json' (regexes are allowed).", dest = 'pattern')
         self.parser.add_argument('-r', action = 'store_true', default = False, help = 'Flag to search directory recursively', dest = 'recurisive')        
         self.parser.add_argument('-D', action = 'store_true', default = False, help = 'Flag to list distinct files only.', dest = 'distinct')
@@ -78,13 +85,47 @@ class Processor(Program):
         self.parser.add_argument('--unzip', action = 'store_true', default = False, help = 'Flag to unzip archives in directory.')
         self.parser.add_argument('--showlist', action = 'store_true', default = True, help = 'Flag indicating only to print contents of a given directory.')
 
-class ProcessorCommand(Command):
+class StageCommand(Command):
     def set_context_from_args(self):
-        super(ProcessorCommand, self).set_context_from_args(
-            filters = ['pattern', 'unzip', 'distinct',
-                       'files_only', 'recurisive'])
-    
-class DBCommand(Command):
+        super(StageCommand, self).set_context_from_args(
+            filters = ['pattern',
+                       'unzip',
+                       'distinct',
+                       'files_only',
+                       'recurisive'])
+
+class Listdir(StageCommand):
+    @staticmethod
+    def func(args):
+        return Folder.table(args.dirname, **args.kwds)
+
+    @staticmethod
+    def show(dirlist, **kwds):
+        print dirlist.prettify()
+
+    def __call__(self, **kwds):
+        dl = self.func(self.args)
+        if self.args.showlist:
+            print DISPLAY(self.args.dirname)
+            self.show(dl, **kwds)
+        return dl
+
+    def execute(self):
+        super(Listdir, self).execute(); self()
+
+class Normalize(StageCommand):
+    @staticmethod
+    def func(args):
+        pass
+
+    @staticmethod
+    def add_switches(sub_parser):
+        sub_parser.add_argument('-s', '--schema', help = 'Name specifying table structure and nature of data to normalize.')
+        sub_parser.add_argument('-t', dest = 'table', nargs = '?', help = 'If normalization is successful, import files info specified database table.')
+        sub_parser.add_argument('--load_db', action = 'store_true', default = False, help = 'Flag indicating that normalized csvfiles can be imported into database.')
+        sub_parser.set_defaults(showlist = False)
+
+class DatabaseCommand(Command):
     @staticmethod
     def add_switches(sub_parser): # add arguments here.
         sub_parser.add_argument('-t', dest = 'table')
@@ -94,55 +135,24 @@ class DBCommand(Command):
         sub_parser.add_argument('-host')
         sub_parser.add_argument('-port', default = 3306, type = int)
 
-class Listdir(ProcessorCommand):
-
-    @staticmethod
-    def func(dirname, **kwds):
-        return Folder.table(dirname, **kwds)
-    
-    @staticmethod
-    def showlist(dirname, **kwds):
-        print Listdir.func(dirname, **kwds).prettify()
-
-    def execute(self):
-        super(Listdir, self).execute()
-        dirname = self.args.dirname
-        if self.args.showlist:
-            print; print "Displaying contents of '{}'".format(dirname if dirname != '.' else os.getcwd())
-            self.showlist(dirname, **self.kwds)
-        return self.func(dirname, **self.kwds)
-
-class Normalize(ProcessorCommand):
-    @staticmethod
-    def func(row, *args, **kwds):
-        return Stage.processfile(row.path, *args, **kwds)
-
-    @staticmethod
-    def listdir(dirname, commandmap = {}, **kwds):
-        if not commandmap:
-            commandmap = COMMAND_MAP
-        return commandmap['listdir']['class'].func(dirname, **kwds)
-
-    @staticmethod
-    def add_switches(sub_parser):
-        sub_parser.add_argument('schema_name', nargs = '?', help = 'Name specifying table structure and nature of data to normalize.')
-        sub_parser.add_argument('-i', default = '', nargs = '?', help = "One or more files for input.", dest = 'infile')
-
     def set_context_from_args(self):
-        super(Normalize, self).set_context_from_args()
-        self.list = self.listdir(self.args.dirname, **self.kwds)
+        super(DatabaseCommand, self).set_context_from_args(
+            filters = ['table',
+                       'user',
+                       'passwd',
+                       'port',
+                       'host'])
 
-    def execute(self):
-        super(Normalize, self).execute()
-        for row in self.list.itertuples():
-            self.func(row)
+class LoadDatabase(DatabaseCommand):
+    @staticmethod
+    def func(args):
+        pass    
 
-## Add command maps here.
 COMMAND_MAP = {
     'listdir': {'class': Listdir, 'desc': 'Show the contents of a given directory.'},
     'normalize': {'class': Normalize, 'desc': 'Prepare dataset or file database import and analysis.'},
+    'load_db' : {'class' : LoadDatabase, 'desc' : 'Import csvfiles into mysql database.'}
         }
 
 if __name__ == '__main__':
-    logging.basicConfig(format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %I:%M:%S %p')
-    launch(Processor, COMMAND_MAP)
+    launch(Stagelib, COMMAND_MAP)

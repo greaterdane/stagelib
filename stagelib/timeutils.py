@@ -59,10 +59,10 @@ class Date(object):
 
     def __init__(self, date, strfmt = '%Y-%m-%d', **kwds):
         self.strfmt = strfmt
-        self.date = self.to_datetime(str(date), **kwds)
+        self.date = self.to_datetime(date, **kwds)
 
     def __repr__(self):
-        return str(self.date)
+        return str(self)
 
     def __str__(self):
         if hasattr(self.date, 'strftime'):
@@ -78,7 +78,6 @@ class Date(object):
             except BadDate as e:
                 if force:
                     date_logger.warning("Value '{}' truncated.".format(date))
-                    return
         elif disect:
             return _.disect()
         else:
@@ -89,22 +88,24 @@ class Date(object):
         return True if re_EPOCH.search(date) else False
 
     def to_datetime(self, date, dayfirst = False, **kwds):
-        if not isinstance(date, str):
+        try:
+            assert isinstance(date, str)
+        except:
+            if not date:
+                return
             date = str(date)
-        elif not date:
-            return
 
         if Date.is_epoch(date):
-            date = epoch_to_datetime(date)
+            return epoch_to_datetime(date)
         try:
-            date = pd.to_datetime(date, dayfirst = dayfirst, **kwds)
+            return pd.to_datetime(date, dayfirst = dayfirst, **kwds)
         except ValueError as e:
-            date = pd.to_datetime(try_date_formats(date))
+            return pd.to_datetime(try_date_formats(date))
         return date
 
     def disect(self):
         __ = map(lambda x: (x[0].split('_')[1], x[1]),
-            attribute_generator(self.date.timetuple()))
-        return mergedicts({
-            self.FIELDMAP.get(k, k) : v for (k, v) in __},
-                quarter = self.date.quarter)
+                 attribute_generator(self.date.timetuple()))
+
+        _ = {self.FIELDMAP.get(k, k) : v for (k, v) in __}
+        return mergedicts(_, quarter = self.date.quarter)

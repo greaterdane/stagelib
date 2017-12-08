@@ -64,7 +64,7 @@ def get_exact_matches(x_df, y_df):
     """
     return x_df.fuzzy\
         .map(y_df.reset_index()\
-        .get_mapper('fuzzy', 'index'))\
+        .getmapper('fuzzy', 'index'))\
         .reindex(x_df.index)
 
 def create_groups(x_df, y_df):

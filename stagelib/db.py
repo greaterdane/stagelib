@@ -1,12 +1,12 @@
 import os, sys, logging
 from warnings import filterwarnings
 import MySQLdb
-from functools import wraps
+from functools import partial, wraps
 import pandas as pd
 from peewee import *
 from playhouse.shortcuts import RetryOperationalError
 
-from generic import reversedict, logging_setup, chunker
+from generic import reversedict, filterdict, logging_setup, chunker
 from files import joinpath, readjson
 import dataframe
 
@@ -24,11 +24,11 @@ def getdb(dbname, flavor = 'mysql', path = 'login.json', hostalias = 'localhost'
 def dbclasses():
     return {'mysql' : CustomMySQLDatabase, 'sqllite' : SqliteDatabase}
 
-def to_records(query):
+def to_rows(query):
     return list(query.dicts().execute())
 
 def to_dataframe(query, cleanup = False):
-    df = pd.DataFrame(to_records(query))
+    df = pd.DataFrame(to_rows(query))
     if cleanup:
         return df.clean()
     return df
@@ -59,7 +59,7 @@ def _insertdecorator(func):
         inserted = 0
         with cls._meta.database.atomic():
             for _rows in rowgroups:
-                _inserted = func(cls, _rows)
+                _inserted = func(cls, map(cls._filt, _rows))
                 inserted += _inserted
         db_logger.info("%s rows successfully inserted into '%s'" % (inserted, tablename))
         return inserted
@@ -70,6 +70,14 @@ def get_basemodel(database):
     class BaseModel(Model):
         class Meta:
             database = dbproxy
+
+        @classmethod
+        def _filt(cls, row):
+            return filterdict(row, cls._meta.fields.keys())
+
+        @classmethod
+        def get_or_create(cls, **kwds):
+            return super(BaseModel, cls).get_or_create(**cls._filt(kwds))
 
         @classmethod
         @_insertdecorator
@@ -90,11 +98,8 @@ def get_basemodel(database):
             return len(inserted)
 
         @classmethod
-        def insertdf(cls, df, extrafields = [], bulk = False, **kwds):
-            rows = df.filter(
-                items = cls._meta.fields.keys() + extrafields
-                    ).dropna(how = 'all').fillna('').to_dict(orient = 'records')
-
+        def insertdf(cls, df, bulk = False, **kwds):
+            rows = df.to_dict(orient = 'records')
             if not rows:
                 db_logger.warning("Nothing to insert (%s).  All fields ('%s') are blank." % (cls.__name__, ', '.join(fields)))
                 return
@@ -133,7 +138,7 @@ class CustomMySQLDatabase(RetryOperationalError, MySQLDatabase):
             fields = Csv(path).testrows[0]
         if overwrite:
             db_logger.warning("Overwriting table '%s' with contents of '%s'." % (table, path))
-            db_logger.warning('truncate %s' % table)
+            cursor.execute('TRUNCATE %s' % table)
     
         db_logger.info("Importing '%s' into '%s'" % (path, table))
         

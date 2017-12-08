@@ -25,11 +25,13 @@ def logging_setup(name = None, logger = None, logging_config = None, ch = None, 
         logging.dictConfig(logging_config)
         return logger
 
-    fmtstring = "%(levelname)s|%(message)s|%(asctime)s"
+    fmtstring = "%(levelname)s - %(message)s - %(asctime)s"
+
     if extrakeys:
-        fmtstring = fmtstring + "|" + '|'.join("%" + "(%s)s" % k for k in extrakeys)
+        fmtstring = (fmtstring  + ' - ') + ' - '.join("%" + "(%s)s" % k for k in extrakeys)
+
     if formatter:
-        fmtstring = fmtstring + "|" + formatter
+        fmtstring = fmtstring + formatter
 
     _formatter = logging.Formatter(fmtstring)
     if not fh:
@@ -71,6 +73,9 @@ def filterdict(dictionary, list_or_pattern, inverse = False, flags = re.I):
 
     return {k : v for k, v in dictionary.items() if func(k)}
 
+def getkwds(kwds, func):
+    return filterdict(kwds, func.func_code.co_varnames)
+
 def dictupgrade(dictionary, func, *args, **kwds):
     return {k : func(v, *args, **kwds) for k, v in dictionary.items()}
 
@@ -86,6 +91,15 @@ def loadcontainer(func, container = dict):
     def inner(*args, **kwds):
         return container(func(*args, **kwds))
     return inner
+
+def requiresattr(name):
+    def decorator(func):
+        @wraps(func)
+        def inner(obj, *args, **kwds):
+            if hasattr(obj, name):
+                return func(obj, *args, **kwds)
+        return inner
+    return decorator
 
 def attribute_generator(obj, private_attrs = False, callables_only = False, key = None):
     """Takes an object, obj (can be any object), and yields

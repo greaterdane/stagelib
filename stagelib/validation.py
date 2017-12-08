@@ -47,8 +47,16 @@ def is_valid_name(series, **kwds):
 class Errorcatch(GenericBase):
     ADDITIONS = {}
     def __init__(self, *args, **kwds):
-        schema_name = kwds.pop('schema_name', '')
-        super(Errorcatch, self).__init__(schema_name, *args, **kwds)
+        schema = kwds.pop('schema', '')
+        super(Errorcatch, self).__init__(schema, *args, **kwds)
+        self.length = 0
+        self._errors = defaultdict(pd.DataFrame)
+        self.table = pd.DataFrame({
+            'shortname' : [],
+            'description' : [],
+            'count' : [],
+            'level' : []
+                })
 
     def __radd__(self, other):
         if other == 0:
@@ -56,26 +64,22 @@ class Errorcatch(GenericBase):
         return self.__add__(other)
 
     def __add__(self, other):
-        if not hasattr(self, 'table'):
-            self.table = other.table
-        else:
-            self.table['count'] += other.table['count']
-
-        self.length = getattr(self, 'length', 0) + other.length
+        self.length += other.length
+        self._addcounts(other.table)
         for k, v in other._errors.items():
             self._errors[k].append(v)
         return self
 
     @property
     def errors(self):
-        return (self.table.level == 'ERROR') & (self.table['count'] > 0)
+        return (self.table.level.contains('^ERROR$')) & (self.table['count'] > 0)
 
     @property
     def warnings(self):
-        return self.table.level == 'WARNING'
+        return self.table.level.contains(r'WARNING$')
 
     @property
-    def danger(self):
+    def ready(self):
         return self.errors.any()
 
     @property
@@ -118,25 +122,33 @@ class Errorcatch(GenericBase):
         __ = (self.warnings) &\
              (self.table['count'] / self.length >= 0.75)
         self.table.loc[__, 'level'] = 'ERROR'
+    
+    def _addcounts(self, table_df):
+        if self.table.empty:
+            self.table = table_df
+        else:
+            self.table = self.table.reindex(table_df.index)
+            self.table['count'] += table_df['count']
 
     def evaluate(self, df):
-        self.length = len(df)
-        self._errors = defaultdict(pd.DataFrame)
+        self.length += len(df)
         self.info("Checking for errors ....")
-        self.table = pd.DataFrame([
+        
+        self._addcounts(pd.DataFrame([
             self.parse(item, df) for item in self.runchecks(df)
-                ])
+                ]))
         
         self._reconcile()
-        self.table.sort_values(by = ['count', 'level'],
-                               ascending = False,
-                               inplace = True)
         return self
 
     def save(self, outfile, **kwds):
         self.info("One moment please.  Saving errors to '%s'." % outfile)
         sheets = OrderedDict(mergedicts(self._errors, **kwds))
-        df2excel(outfile, keepindex = True, **sheets)
+        df2excel(outfile, **sheets)
+        delattr(self, '_errors')
         
     def showresults(self, **kwds):
-        print; print self.table.prettify(**kwds)
+        print self.table.sort_values(by = ['count', 'level'],
+                                     ascending = False).filter(
+                                        regex = 'desc|count|level'
+                                            ).prettify(**kwds)
